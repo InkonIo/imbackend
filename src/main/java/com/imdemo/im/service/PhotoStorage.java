@@ -10,8 +10,12 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.security.DigestInputStream;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.HexFormat;
 import java.util.Map;
 import java.util.UUID;
 
@@ -34,6 +38,8 @@ public class PhotoStorage {
             "heic", "image/heic",
             "heif", "image/heif");
 
+    public record Saved(String path, String sha256) {}
+
     private final Path root;
 
     public PhotoStorage(@Value("${app.upload-dir}") String dir) throws IOException {
@@ -41,8 +47,7 @@ public class PhotoStorage {
         Files.createDirectories(root);
     }
 
-    /** Сохраняет файл и возвращает относительный путь вида 2026-10-02/uuid.jpg */
-    public String save(MultipartFile file) {
+    public Saved save(MultipartFile file) {
         if (file == null || file.isEmpty()) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Файл пустой");
         }
@@ -55,13 +60,14 @@ public class PhotoStorage {
         Path target = resolve(relative);
         try {
             Files.createDirectories(target.getParent());
-            try (InputStream in = file.getInputStream()) {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            try (InputStream in = new DigestInputStream(file.getInputStream(), md)) {
                 Files.copy(in, target);
             }
-        } catch (IOException e) {
+            return new Saved(relative, HexFormat.of().formatHex(md.digest()));
+        } catch (IOException | NoSuchAlgorithmException e) {
             throw new ApiException(HttpStatus.INTERNAL_SERVER_ERROR, "Не удалось сохранить фото");
         }
-        return relative;
     }
 
     public Path resolve(String relative) {
@@ -82,7 +88,7 @@ public class PhotoStorage {
         try {
             Files.deleteIfExists(resolve(relative));
         } catch (IOException ignored) {
-            // файл мог уже отсутствовать, запись в БД всё равно удаляем
+            // файл мог уже отсутствовать
         }
     }
 }

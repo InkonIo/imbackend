@@ -35,10 +35,11 @@ public class ChecklistController {
         return service.update(p.id(), id, r);
     }
 
-    @PostMapping(value = "/items/{id}/photos", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+        @PostMapping(value = "/items/{id}/photos", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
     public ChecklistDto addPhoto(@AuthenticationPrincipal UserPrincipal p, @PathVariable Long id,
-                                 @RequestParam("file") MultipartFile file) {
-        return service.addPhoto(p.id(), id, file);
+                                 @RequestParam("file") MultipartFile file,
+                                 @RequestParam(value = "takenAt", required = false) Long takenAt) {
+        return service.addPhoto(p.id(), id, file, takenAt);
     }
 
     @DeleteMapping("/photos/{id}")

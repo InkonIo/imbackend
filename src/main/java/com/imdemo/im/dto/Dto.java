@@ -3,6 +3,10 @@ package com.imdemo.im.dto;
 import com.imdemo.im.domain.AccountRole;
 import com.imdemo.im.domain.DayPart;
 import com.imdemo.im.domain.ShiftRole;
+import com.imdemo.im.dto.Dto.ItemReportDto;
+import com.imdemo.im.dto.Dto.PhotoDto;
+import com.imdemo.im.dto.Dto.ShiftSummaryDto;
+
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Size;
@@ -12,6 +16,10 @@ import com.imdemo.im.domain.AuditEventType;
 import com.imdemo.im.domain.PhotoMode;
 import com.imdemo.im.domain.RunItemStatus;
 import java.time.LocalTime;
+
+import com.imdemo.im.domain.FlagSeverity;
+import com.imdemo.im.domain.FlagType;
+import com.imdemo.im.domain.ReviewStatus;
 
 import java.time.LocalDate;
 import java.time.OffsetDateTime;
@@ -87,19 +95,22 @@ public final class Dto {
             @NotNull RunItemStatus status,
             @Size(max = 1000) String comment) {}
 
-                public record ShiftSummaryDto(Long shiftId, Long userId, String userName, String userLogin,
+        public record FlagDto(Long id, FlagType type, FlagSeverity severity, String details,
+                          OffsetDateTime createdAt, Long runItemId, Long photoId, ReviewStatus reviewStatus) {}
+
+    public record ShiftSummaryDto(Long shiftId, Long userId, String userName, String userLogin,
                                   Long outletId, String outletName, ShiftRole shiftRole, DayPart dayPart,
                                   LocalDate shiftDate, OffsetDateTime startedAt, OffsetDateTime finishedAt,
-                                  int total, int completed, int problems, int photos, int flagged) {}
+                                  int total, int completed, int problems, int photos, int flagged, int activeMin) {}
 
     public record ItemReportDto(Long id, int sectionOrder, String sectionTitle, String title,
                                 RunItemStatus status, Integer normMin, Integer actualMin,
                                 LocalTime dueFrom, LocalTime dueTo, Integer lateMin,
                                 OffsetDateTime startedAt, OffsetDateTime doneAt, String comment,
                                 PhotoMode photoMode, boolean directorReview,
-                                List<String> flags, List<PhotoDto> photos) {}
+                                List<FlagDto> flags, List<PhotoDto> photos) {}
 
-    public record ShiftReportDto(ShiftSummaryDto shift, List<ItemReportDto> items) {}
+    public record ShiftReportDto(ShiftSummaryDto shift, List<FlagDto> shiftFlags, List<ItemReportDto> items) {}
 
     public record ShiftDto(Long id, Long outletId, String outletName, ShiftRole shiftRole, DayPart dayPart,
                            LocalDate shiftDate, OffsetDateTime startedAt, OffsetDateTime finishedAt) {}

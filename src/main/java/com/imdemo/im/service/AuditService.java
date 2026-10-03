@@ -107,6 +107,12 @@ public class AuditService {
         return s.length() <= max ? s : s.substring(0, max);
     }
 
+        /** ID устройства из заголовка текущего запроса (или null). */
+    public static String currentDeviceId() {
+        if (!(RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attrs)) return null;
+        return cut(attrs.getRequest().getHeader("X-Device-Id"), 64);
+    }
+
     // ---------- чтение ----------
 
     @Transactional(readOnly = true)

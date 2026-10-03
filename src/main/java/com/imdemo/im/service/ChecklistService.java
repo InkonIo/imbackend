@@ -17,6 +17,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.nio.file.Path;
 import java.time.Duration;
+import java.time.Instant;
 import java.time.OffsetDateTime;
 import java.time.ZoneId;
 import java.time.ZonedDateTime;
@@ -41,6 +42,7 @@ public class ChecklistService {
     private final ShiftSessionRepository shifts;
     private final PhotoStorage storage;
     private final AuditService audit;
+    private final FlagService flags;
     private final EntityManager em;
 
     public record PhotoFile(Path path, String contentType) {}
@@ -94,7 +96,6 @@ public class ChecklistService {
         return run.map(this::toDto);
     }
 
-    /** Короткая сводка для журнала при завершении смены. */
     @Transactional(readOnly = true)
     public Optional<String> progressText(Long shiftId) {
         return runs.findByShiftId(shiftId).map(run -> {
@@ -117,6 +118,7 @@ public class ChecklistService {
         ensureWindowOpen(ri);
         ri.setStartedAt(OffsetDateTime.now());
         audit.log(AuditEventType.ITEM_STARTED, shiftOf(ri), "run_item", ri.getId(), ri.getTitle());
+        flags.checkDevice(shiftOf(ri));
         return toDto(ri.getRun());
     }
 
@@ -178,25 +180,36 @@ public class ChecklistService {
         ri.setComment(r.status() == RunItemStatus.PENDING ? null : comment);
         ri.setDoneAt(r.status() == RunItemStatus.PENDING ? null : now);
         audit.log(event, shiftOf(ri), "run_item", ri.getId(), details);
+
+        if (r.status() != RunItemStatus.PENDING) {
+            flags.onItemClosed(ri, now);
+        }
+        flags.checkDevice(shiftOf(ri));
         return toDto(ri.getRun());
     }
 
     // ---------- фото ----------
 
     @Transactional
-    public ChecklistDto addPhoto(Long userId, Long runItemId, MultipartFile file) {
+    public ChecklistDto addPhoto(Long userId, Long runItemId, MultipartFile file, Long takenAtMs) {
         ChecklistRunItem ri = ownedOpenItem(userId, runItemId);
         requirePending(ri);
         if (ri.getPhotos().size() >= 5) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Максимум 5 фото на пункт");
         }
+        PhotoStorage.Saved saved = storage.save(file);
         ChecklistPhoto photo = new ChecklistPhoto();
         photo.setRunItem(ri);
-        photo.setFilePath(storage.save(file));
+        photo.setFilePath(saved.path());
+        photo.setSha256(saved.sha256());
+        photo.setTakenAt(toTakenAt(takenAtMs));
         ri.getPhotos().add(photo);
         em.flush();
+
         audit.log(AuditEventType.PHOTO_UPLOADED, shiftOf(ri), "photo", photo.getId(),
                 ri.getTitle() + " · фото " + ri.getPhotos().size());
+        flags.onPhotoUploaded(ri, photo, OffsetDateTime.now());
+        flags.checkDevice(shiftOf(ri));
         return toDto(ri.getRun());
     }
 
@@ -246,6 +259,13 @@ public class ChecklistService {
         if (ZonedDateTime.now(ZONE).isBefore(opensAt)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Ещё рано: пункт доступен с " + ri.getDueFrom().format(HM));
         }
+    }
+
+    /** Время съёмки от клиента (EXIF или дата файла). Явный мусор отбрасываем. */
+    private static OffsetDateTime toTakenAt(Long ms) {
+        if (ms == null || ms <= 0) return null;
+        if (ms > System.currentTimeMillis() + Duration.ofMinutes(5).toMillis()) return null;
+        return OffsetDateTime.ofInstant(Instant.ofEpochMilli(ms), ZONE);
     }
 
     private static String timingDetails(ChecklistRunItem ri, OffsetDateTime now) {

@@ -26,4 +26,10 @@ public class ChecklistPhoto {
 
     @Column(name = "uploaded_at", nullable = false)
     private OffsetDateTime uploadedAt = OffsetDateTime.now();
+
+    @Column(length = 64)
+    private String sha256;
+
+    @Column(name = "taken_at")
+    private OffsetDateTime takenAt;
 }

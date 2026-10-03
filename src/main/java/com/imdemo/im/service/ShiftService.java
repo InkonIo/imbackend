@@ -34,6 +34,7 @@ public class ShiftService {
     private final ChecklistService checklistService;
     private final AuditService audit;
     private final EntityManager em;
+    private final FlagService flagService;
 
     @Transactional
     public ShiftDto start(Long userId, StartShiftRequest r) {
@@ -77,7 +78,9 @@ public class ShiftService {
     public ShiftDto finish(Long userId) {
         ShiftSession s = shifts.findFirstByUserIdAndFinishedAtIsNull(userId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Активной смены нет"));
-        s.setFinishedAt(OffsetDateTime.now());
+        OffsetDateTime now = OffsetDateTime.now();
+        s.setFinishedAt(now);
+        flagService.onShiftFinished(s, now);
         audit.log(AuditEventType.SHIFT_FINISHED, s, "shift", s.getId(),
                 checklistService.progressText(s.getId()).orElse("без чек-листа"));
         return Mappers.shift(s);
