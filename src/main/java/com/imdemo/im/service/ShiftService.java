@@ -35,6 +35,7 @@ public class ShiftService {
     private final AuditService audit;
     private final EntityManager em;
     private final FlagService flagService;
+    private final com.imdemo.im.analytics.service.MetricsService metricsService;
 
     @Transactional
     public ShiftDto start(Long userId, StartShiftRequest r) {
@@ -81,6 +82,7 @@ public class ShiftService {
         OffsetDateTime now = OffsetDateTime.now();
         s.setFinishedAt(now);
         flagService.onShiftFinished(s, now);
+        metricsService.recompute(s.getId());
         audit.log(AuditEventType.SHIFT_FINISHED, s, "shift", s.getId(),
                 checklistService.progressText(s.getId()).orElse("без чек-листа"));
         return Mappers.shift(s);

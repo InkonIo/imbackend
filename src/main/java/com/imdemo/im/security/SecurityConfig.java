@@ -33,6 +33,7 @@ public class SecurityConfig {
                                 "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
                         .requestMatchers("/api/admin/**").hasRole("SUPER_ADMIN")
                         .requestMatchers("/api/audit/**").hasAnyRole("SUPER_ADMIN", "DIRECTOR")
+                        .requestMatchers("/api/review/**").hasAnyRole("SUPER_ADMIN", "DIRECTOR")
                         .anyRequest().authenticated())
                 .exceptionHandling(e -> e.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
                 .addFilterBefore(new JwtAuthFilter(jwtService, userRepository),

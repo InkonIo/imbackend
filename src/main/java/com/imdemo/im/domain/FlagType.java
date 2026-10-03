@@ -4,6 +4,7 @@ public enum FlagType {
     TOO_FAST(FlagSeverity.HIGH),
     OLD_PHOTO(FlagSeverity.HIGH),
     DUPLICATE_PHOTO(FlagSeverity.HIGH),
+    REJECTED(FlagSeverity.HIGH),        // директор: «неправильно принято»
     LATE(FlagSeverity.MEDIUM),
     SKIPPED(FlagSeverity.MEDIUM),
     NOT_DONE(FlagSeverity.MEDIUM),
