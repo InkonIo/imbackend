@@ -73,4 +73,7 @@ public class ChecklistRunItem {
     @OneToMany(mappedBy = "runItem", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("uploadedAt ASC")
     private List<ChecklistPhoto> photos = new ArrayList<>();
+
+    @Column(length = 2000)
+    private String instructions;
 }

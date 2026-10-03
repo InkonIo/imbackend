@@ -49,4 +49,7 @@ public class ChecklistItem {
 
     @Column(nullable = false)
     private boolean active = true;
+
+    @Column(length = 2000)
+    private String instructions;
 }

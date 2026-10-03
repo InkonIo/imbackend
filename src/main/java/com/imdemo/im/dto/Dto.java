@@ -3,9 +3,6 @@ package com.imdemo.im.dto;
 import com.imdemo.im.domain.AccountRole;
 import com.imdemo.im.domain.DayPart;
 import com.imdemo.im.domain.ShiftRole;
-import com.imdemo.im.dto.Dto.ItemReportDto;
-import com.imdemo.im.dto.Dto.PhotoDto;
-import com.imdemo.im.dto.Dto.ShiftSummaryDto;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
@@ -74,6 +71,7 @@ public final class Dto {
         public record PhotoDto(Long id, String url, OffsetDateTime uploadedAt) {}
 
         public record RunItemDto(Long id, int sectionOrder, String sectionTitle, int sortOrder, String title,
+                             String instructions,
                              Integer durationMin, LocalTime dueFrom, LocalTime dueTo,
                              PhotoMode photoMode, boolean directorReview, boolean timed,
                              RunItemStatus status, String comment,

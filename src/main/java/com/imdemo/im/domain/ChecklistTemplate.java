@@ -35,4 +35,8 @@ public class ChecklistTemplate {
     @OneToMany(mappedBy = "template", cascade = CascadeType.ALL, orphanRemoval = true)
     @OrderBy("sortOrder ASC")
     private List<ChecklistSection> sections = new ArrayList<>();
+
+    /** null = общий маршрут для всех точек */
+    @Column(name = "outlet_id")
+    private Long outletId;
 }

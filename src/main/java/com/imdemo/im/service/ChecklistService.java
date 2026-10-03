@@ -51,7 +51,11 @@ public class ChecklistService {
 
     @Transactional
     public Optional<ChecklistRun> createRun(ShiftSession shift) {
-        return templates.findByShiftRoleAndDayPartAndActiveTrue(shift.getShiftRole(), shift.getDayPart())
+                Long outletId = shift.getOutlet().getId();
+        return templates.findFirstByShiftRoleAndDayPartAndOutletIdAndActiveTrue(
+                        shift.getShiftRole(), shift.getDayPart(), outletId)
+                .or(() -> templates.findFirstByShiftRoleAndDayPartAndOutletIdIsNullAndActiveTrue(
+                        shift.getShiftRole(), shift.getDayPart()))
                 .map(template -> {
                     ChecklistRun run = new ChecklistRun();
                     run.setShift(shift);
@@ -70,6 +74,7 @@ public class ChecklistService {
 
     private ChecklistRunItem copy(ChecklistRun run, ChecklistSection section, ChecklistItem item) {
         ChecklistRunItem ri = new ChecklistRunItem();
+                ri.setInstructions(item.getInstructions());
         ri.setRun(run);
         ri.setItem(item);
         ri.setSectionOrder(section.getSortOrder());
@@ -312,7 +317,7 @@ public class ChecklistService {
                 .toList();
         OffsetDateTime reopenUntil = ri.getDoneAt() == null ? null : ri.getDoneAt().plus(REOPEN_WINDOW);
         return new RunItemDto(ri.getId(), ri.getSectionOrder(), ri.getSectionTitle(), ri.getSortOrder(),
-                ri.getTitle(), ri.getDurationMin(), ri.getDueFrom(), ri.getDueTo(),
+                ri.getTitle(), ri.getInstructions(), ri.getDurationMin(), ri.getDueFrom(), ri.getDueTo(),
                 ri.getPhotoMode(), ri.isDirectorReview(), isTimed(ri),
                 ri.getStatus(), ri.getComment(), ri.getStartedAt(), ri.getDoneAt(), reopenUntil, photos);
     }

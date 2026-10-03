@@ -34,6 +34,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/admin/**").hasRole("SUPER_ADMIN")
                         .requestMatchers("/api/audit/**").hasAnyRole("SUPER_ADMIN", "DIRECTOR")
                         .requestMatchers("/api/review/**").hasAnyRole("SUPER_ADMIN", "DIRECTOR")
+                        .requestMatchers("/api/templates/**").hasAnyRole("SUPER_ADMIN", "DIRECTOR")
                         .anyRequest().authenticated())
                 .exceptionHandling(e -> e.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
                 .addFilterBefore(new JwtAuthFilter(jwtService, userRepository),
