@@ -114,4 +114,10 @@ public class ShiftMetrics {
 
     @Column(name = "computed_at", nullable = false)
     private OffsetDateTime computedAt = OffsetDateTime.now();
+
+    @Column(name = "confirmed_high", nullable = false)
+    private int confirmedHigh;
+
+    @Column(name = "confirmed_medium", nullable = false)
+    private int confirmedMedium;
 }

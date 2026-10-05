@@ -45,6 +45,8 @@ public class ChecklistService {
     private final FlagService flags;
     private final EntityManager em;
 
+     private final org.springframework.context.ApplicationEventPublisher publisher;
+
     public record PhotoFile(Path path, String contentType) {}
 
     // ---------- создание прогона ----------
@@ -74,7 +76,8 @@ public class ChecklistService {
 
     private ChecklistRunItem copy(ChecklistRun run, ChecklistSection section, ChecklistItem item) {
         ChecklistRunItem ri = new ChecklistRunItem();
-                ri.setInstructions(item.getInstructions());
+        ri.setInstructions(item.getInstructions());
+        ri.setTelegramNotify(item.isTelegramNotify());
         ri.setRun(run);
         ri.setItem(item);
         ri.setSectionOrder(section.getSortOrder());
@@ -188,6 +191,12 @@ public class ChecklistService {
 
         if (r.status() != RunItemStatus.PENDING) {
             flags.onItemClosed(ri, now);
+        }
+
+                // в Telegram: если пункт проверяет директор или включена отправка
+        if ((ri.isDirectorReview() || ri.isTelegramNotify())
+                && (r.status() == RunItemStatus.DONE || r.status() == RunItemStatus.PROBLEM)) {
+            publisher.publishEvent(new com.imdemo.im.events.AppEvents.ReviewNeeded(ri.getId()));
         }
         flags.checkDevice(shiftOf(ri));
         return toDto(ri.getRun());

@@ -16,7 +16,7 @@ public final class TemplateDto {
 
     public record Item(Long id, Long sectionId, String title, String instructions, int sortOrder,
                        Integer durationMin, LocalTime dueFrom, LocalTime dueTo, PhotoMode photoMode,
-                       Integer weekday, boolean directorReview, boolean active) {}
+                       Integer weekday, boolean directorReview, boolean telegramNotify, boolean active) {}
 
     public record Section(Long id, String title, int sortOrder, List<Item> items) {}
 
@@ -40,5 +40,6 @@ public final class TemplateDto {
                               @NotNull PhotoMode photoMode,
                               @Min(1) @Max(7) Integer weekday,
                               boolean directorReview,
+                              boolean telegramNotify,
                               Boolean active) {}
 }

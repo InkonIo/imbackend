@@ -94,7 +94,15 @@ public class MetricsService {
         m.setItemsApproved((int) reviews.countByShiftIdAndDecision(shiftId, ReviewDecision.APPROVED));
         m.setItemsRejected((int) reviews.countByShiftIdAndDecision(shiftId, ReviewDecision.REJECTED));
 
-        m.setScore(null); // формула баллов будет на следующем шаге
+                // подтверждённые нарушения по серьёзности (пропуск и невыполнение уже штрафуются отдельно)
+        m.setConfirmedHigh(countF(fl, f -> f.getReviewStatus() == ReviewStatus.CONFIRMED
+                && f.getSeverity() == FlagSeverity.HIGH));
+        m.setConfirmedMedium(countF(fl, f -> f.getReviewStatus() == ReviewStatus.CONFIRMED
+                && f.getSeverity() == FlagSeverity.MEDIUM
+                && f.getType() != FlagType.SKIPPED && f.getType() != FlagType.NOT_DONE));
+
+        // баллы только у завершённых смен
+        m.setScore(s.getFinishedAt() == null ? null : ScoreRules.score(m));
         m.setComputedAt(OffsetDateTime.now());
         metrics.save(m);
     }

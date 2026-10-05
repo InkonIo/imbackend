@@ -46,4 +46,9 @@ public class AuditController {
     public ShiftReportDto shift(@AuthenticationPrincipal UserPrincipal p, @PathVariable Long id) {
         return reports.report(p, id);
     }
+
+        @GetMapping("/users")
+    public List<com.imdemo.im.dto.Dto.UserBrief> users(@AuthenticationPrincipal UserPrincipal p) {
+        return audit.visibleUsers(p);
+    }
 }

@@ -288,14 +288,15 @@ public class TemplateService {
                 t.getTitle(), t.isActive(), t.getSections().size(), itemCount, a.canEdit(t));
     }
 
-    private static Item item(ChecklistSection s, ChecklistItem i) {
+        private static Item item(ChecklistSection s, ChecklistItem i) {
         return new Item(i.getId(), s.getId(), i.getTitle(), i.getInstructions(), i.getSortOrder(),
                 i.getDurationMin(), i.getDueFrom(), i.getDueTo(), i.getPhotoMode(),
-                i.getWeekday(), i.isDirectorReview(), i.isActive());
+                i.getWeekday(), i.isDirectorReview(), i.isTelegramNotify(), i.isActive());
     }
 
     private static ChecklistItem copyItem(ChecklistItem si) {
         ChecklistItem ni = new ChecklistItem();
+        ni.setTelegramNotify(si.isTelegramNotify());
         ni.setTitle(si.getTitle());
         ni.setInstructions(si.getInstructions());
         ni.setSortOrder(si.getSortOrder());
@@ -312,6 +313,7 @@ public class TemplateService {
     private static void apply(ChecklistItem i, ItemRequest r) {
         i.setTitle(r.title().trim());
         i.setInstructions(r.instructions() == null || r.instructions().isBlank() ? null : r.instructions().trim());
+        i.setTelegramNotify(r.telegramNotify());
         i.setDurationMin(r.durationMin());
         i.setDueFrom(r.dueFrom());
         i.setDueTo(r.dueTo());

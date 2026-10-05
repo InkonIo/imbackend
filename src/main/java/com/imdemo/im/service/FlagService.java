@@ -32,6 +32,8 @@ public class FlagService {
     static final Duration OLD_PHOTO = Duration.ofMinutes(15);
     static final Duration IDLE_LIMIT = Duration.ofMinutes(120);
 
+    private final org.springframework.context.ApplicationEventPublisher publisher;
+
     private static final Map<FlagType, String> LABEL = Map.of(
             FlagType.TOO_FAST, "досрочно",
             FlagType.SLOW, "дольше нормы",
@@ -185,6 +187,9 @@ public class FlagService {
             if (ri != null) text.append(" · ").append(ri.getTitle());
             if (details != null) text.append(" · ").append(details);
             audit.log(AuditEventType.FLAG_RAISED, s, "flag", f.getId(), text.toString());
+        }
+        if (logEvent && f.getSeverity() != FlagSeverity.LOW) {
+            publisher.publishEvent(new com.imdemo.im.events.AppEvents.FlagRaised(f.getId()));
         }
     }
 

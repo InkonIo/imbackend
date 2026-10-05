@@ -3,6 +3,7 @@ package com.imdemo.im.service;
 import com.imdemo.im.domain.*;
 import com.imdemo.im.dto.Dto.AuditEventDto;
 import com.imdemo.im.dto.Dto.AuditPage;
+import com.imdemo.im.dto.Dto.UserBrief;
 import com.imdemo.im.repo.AuditEventRepository;
 import com.imdemo.im.repo.UserRepository;
 import com.imdemo.im.security.UserPrincipal;
@@ -153,5 +154,21 @@ public class AuditService {
                         e.getDetails(), e.getIp(), e.getUserAgent(), e.getDeviceId()))
                 .toList();
         return new AuditPage(items, safePage, safeSize, result.getTotalElements());
+    }
+
+        /** Сотрудники для фильтра журнала: суперадмин видит всех, директор только людей своих точек. */
+    @Transactional(readOnly = true)
+    public List<UserBrief> visibleUsers(UserPrincipal viewer) {
+        List<AppUser> all = users.findAll(Sort.by("fullName"));
+        if (viewer.role() != AccountRole.DIRECTOR) {
+            return all.stream().map(u -> new UserBrief(u.getId(), u.getFullName(), u.getLogin())).toList();
+        }
+        Set<Long> mine = users.findById(viewer.id())
+                .map(u -> u.getOutlets().stream().map(Outlet::getId).collect(Collectors.toSet()))
+                .orElse(Set.of());
+        return all.stream()
+                .filter(u -> u.getOutlets().stream().anyMatch(o -> mine.contains(o.getId())))
+                .map(u -> new UserBrief(u.getId(), u.getFullName(), u.getLogin()))
+                .toList();
     }
 }

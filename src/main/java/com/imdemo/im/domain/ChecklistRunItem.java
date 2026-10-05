@@ -76,4 +76,7 @@ public class ChecklistRunItem {
 
     @Column(length = 2000)
     private String instructions;
+
+    @Column(name = "telegram_notify", nullable = false)
+    private boolean telegramNotify;
 }

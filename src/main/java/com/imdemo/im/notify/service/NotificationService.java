@@ -1,10 +1,12 @@
 package com.imdemo.im.notify.service;
 
+import com.imdemo.im.events.AppEvents;
 import com.imdemo.im.notify.domain.Notification;
 import com.imdemo.im.notify.domain.NotificationType;
 import com.imdemo.im.notify.dto.NotificationDto;
 import com.imdemo.im.notify.repository.NotificationRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -15,6 +17,7 @@ import java.time.OffsetDateTime;
 public class NotificationService {
 
     private final NotificationRepository repo;
+    private final ApplicationEventPublisher publisher;
 
     @Transactional
     public Notification send(Long userId, NotificationType type, String title, String body,
@@ -28,7 +31,9 @@ public class NotificationService {
         n.setRunItemId(runItemId);
         n.setFlagId(flagId);
         n.setCreatedBy(createdBy);
-        return repo.save(n);
+        Notification saved = repo.save(n);
+        publisher.publishEvent(new AppEvents.NotificationCreated(saved.getId()));
+        return saved;
     }
 
     @Transactional(readOnly = true)
@@ -45,7 +50,6 @@ public class NotificationService {
         return new NotificationDto.Unread(repo.countByUserIdAndReadAtIsNull(userId));
     }
 
-    /** «Прочитал» = открыл список. Время прочтения сохраняется, это тоже метрика. */
     @Transactional
     public NotificationDto.Unread readAll(Long userId) {
         repo.markAllRead(userId, OffsetDateTime.now());

@@ -109,6 +109,7 @@ public final class Dto {
                                 List<FlagDto> flags, List<PhotoDto> photos) {}
 
     public record ShiftReportDto(ShiftSummaryDto shift, List<FlagDto> shiftFlags, List<ItemReportDto> items) {}
+    public record UserBrief(Long id, String fullName, String login) {}
 
     public record ShiftDto(Long id, Long outletId, String outletName, ShiftRole shiftRole, DayPart dayPart,
                            LocalDate shiftDate, OffsetDateTime startedAt, OffsetDateTime finishedAt) {}
