@@ -3,7 +3,9 @@ package com.imdemo.im.service;
 import com.imdemo.im.domain.AccountRole;
 import com.imdemo.im.domain.AppUser;
 import com.imdemo.im.domain.AuditEventType;
+import com.imdemo.im.domain.DayPart;
 import com.imdemo.im.domain.Outlet;
+import com.imdemo.im.domain.ShiftRole;
 import com.imdemo.im.domain.ShiftSession;
 import com.imdemo.im.dto.Dto.*;
 import com.imdemo.im.dto.Mappers;
@@ -43,6 +45,9 @@ public class ShiftService {
     public ShiftDto start(Long userId, StartShiftRequest r) {
         AppUser u = users.findById(userId)
                 .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "Пользователь не найден"));
+                if (r.dayPart() == DayPart.MIDDLE && r.shiftRole() == ShiftRole.INSIDE) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Промеж бывает только у менеджеров кухни и прилавка");
+        }
         if (u.isMustChangePassword()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Сначала смени пароль");
         }

@@ -1,4 +1,3 @@
-// ScheduleSlotRepository.java
 package com.imdemo.im.schedule.repository;
 
 import com.imdemo.im.domain.DayPart;
@@ -7,6 +6,7 @@ import com.imdemo.im.schedule.domain.ScheduleSlot;
 import org.springframework.data.jpa.repository.JpaRepository;
 
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.util.Collection;
 import java.util.List;
 import java.util.Optional;
@@ -15,8 +15,13 @@ public interface ScheduleSlotRepository extends JpaRepository<ScheduleSlot, Long
 
     List<ScheduleSlot> findByOutletIdAndSlotDateBetweenOrderBySlotDateAsc(Long outletId, LocalDate from, LocalDate to);
 
+    /** Для утра и вечера (инсайд в чек-листе смены). */
     Optional<ScheduleSlot> findByOutletIdAndSlotDateAndDayPartAndRole(
             Long outletId, LocalDate date, DayPart dayPart, ShiftRole role);
+
+    /** Клетка с учётом времени промежа. Для утра и вечера startTime = null (ищется IS NULL). */
+    Optional<ScheduleSlot> findByOutletIdAndSlotDateAndDayPartAndRoleAndStartTime(
+            Long outletId, LocalDate date, DayPart dayPart, ShiftRole role, LocalTime startTime);
 
     List<ScheduleSlot> findByUserIdInAndSlotDateBetween(Collection<Long> userIds, LocalDate from, LocalDate to);
 

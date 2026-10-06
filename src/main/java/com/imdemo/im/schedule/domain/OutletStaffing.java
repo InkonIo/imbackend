@@ -20,4 +20,8 @@ public class OutletStaffing {
 
     @Column(nullable = false, length = 100)
     private String evening = "INSIDE,SERVICE_MANAGER";
+
+    /** Промежи: 'SERVICE_MANAGER@12:00-21:00;PRODUCTION_MANAGER@11:00-19:00'. */
+    @Column(nullable = false, length = 300)
+    private String middle = "";
 }

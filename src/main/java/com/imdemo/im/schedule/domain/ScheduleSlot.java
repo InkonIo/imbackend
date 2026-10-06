@@ -8,6 +8,7 @@ import lombok.NoArgsConstructor;
 import lombok.Setter;
 
 import java.time.LocalDate;
+import java.time.LocalTime;
 import java.time.OffsetDateTime;
 
 @Entity
@@ -33,6 +34,13 @@ public class ScheduleSlot {
     @Enumerated(EnumType.STRING)
     @Column(name = "slot_role", nullable = false)
     private ShiftRole role;
+
+    /** Только у промежа: с какого и до какого времени. */
+    @Column(name = "start_time")
+    private LocalTime startTime;
+
+    @Column(name = "end_time")
+    private LocalTime endTime;
 
     @Column(name = "user_id")
     private Long userId;

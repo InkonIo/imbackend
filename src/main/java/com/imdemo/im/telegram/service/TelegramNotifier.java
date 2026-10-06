@@ -323,9 +323,9 @@ public class TelegramNotifier {
         tg.sendText(chatId, text, kb);
     }
 
-    private String who(ShiftSession s) {
+        private String who(ShiftSession s) {
         return s.getUser().getFullName() + " · " + s.getOutlet().getName() + " · "
-                + (s.getDayPart() == DayPart.MORNING ? "🌅 Утро" : "🌙 Вечер") + " " + s.getShiftDate().format(DM);
+                + s.getDayPart().label() + " " + s.getShiftDate().format(DM);
     }
 
     private static String hm(OffsetDateTime t) {

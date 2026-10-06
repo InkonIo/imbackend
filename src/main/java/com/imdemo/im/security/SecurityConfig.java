@@ -39,7 +39,8 @@ public class SecurityConfig {
                         .requestMatchers("/api/audit/**").hasAnyRole("SUPER_ADMIN", "DIRECTOR")
                         .requestMatchers("/api/review/**").hasAnyRole("SUPER_ADMIN", "DIRECTOR")
                         .requestMatchers("/api/templates/**").hasAnyRole("SUPER_ADMIN", "DIRECTOR")
-                        .requestMatchers("/api/schedule/my", "/api/schedule/today").authenticated()
+                        .requestMatchers("/api/schedule/my", "/api/schedule/today", "/api/schedule/me/**").authenticated()
+                        .requestMatchers("/api/schedule/**").hasAnyRole("SUPER_ADMIN", "DIRECTOR")
                         .requestMatchers("/api/schedule/**").hasAnyRole("SUPER_ADMIN", "DIRECTOR")
                         .anyRequest().authenticated())
                 .exceptionHandling(e -> e

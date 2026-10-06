@@ -21,6 +21,8 @@ public class ScheduleController {
 
     private final ScheduleService service;
 
+    // ---------- директор и суперадмин ----------
+
     @GetMapping
     public Board board(@AuthenticationPrincipal UserPrincipal p, @RequestParam Long outletId,
                        @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
@@ -65,6 +67,14 @@ public class ScheduleController {
         return ResponseEntity.noContent().build();
     }
 
+    @DeleteMapping("/limits/{id}")
+    public ResponseEntity<Void> deleteLimit(@AuthenticationPrincipal UserPrincipal p, @PathVariable Long id) {
+        service.deleteLimit(p, id);
+        return ResponseEntity.noContent().build();
+    }
+
+    // ---------- любой сотрудник: свой график и пожелания ----------
+
     @GetMapping("/my")
     public List<MySlot> my(@AuthenticationPrincipal UserPrincipal p,
                            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
@@ -75,5 +85,21 @@ public class ScheduleController {
     @GetMapping("/today")
     public List<MySlot> today(@AuthenticationPrincipal UserPrincipal p) {
         return service.today(p);
+    }
+
+    @GetMapping("/me/limits")
+    public List<Limit> myLimits(@AuthenticationPrincipal UserPrincipal p) {
+        return service.myLimits(p);
+    }
+
+    @PostMapping("/me/limits")
+    public Limit addMyLimit(@AuthenticationPrincipal UserPrincipal p, @Valid @RequestBody LimitRequest r) {
+        return service.addMyLimit(p, r);
+    }
+
+    @DeleteMapping("/me/limits/{id}")
+    public ResponseEntity<Void> deleteMyLimit(@AuthenticationPrincipal UserPrincipal p, @PathVariable Long id) {
+        service.deleteLimit(p, id);
+        return ResponseEntity.noContent().build();
     }
 }

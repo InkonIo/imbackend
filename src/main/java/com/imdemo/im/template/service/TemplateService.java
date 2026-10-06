@@ -78,6 +78,9 @@ public class TemplateService {
         if (outletId == null && !a.admin()) {
             throw new ApiException(HttpStatus.FORBIDDEN, "Директор создаёт маршрут только для своей точки");
         }
+        if (r.dayPart() == DayPart.MIDDLE && r.shiftRole() == ShiftRole.INSIDE) {
+            throw new ApiException(HttpStatus.BAD_REQUEST, "Промеж бывает только у кухни и прилавка");
+        }
         if (outletId != null) {
             if (!a.canUseOutlet(outletId)) throw forbidden();
             if (!outlets.existsById(outletId)) throw new ApiException(HttpStatus.NOT_FOUND, "Точка не найдена");
