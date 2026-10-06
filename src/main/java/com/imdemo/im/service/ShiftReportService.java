@@ -91,7 +91,7 @@ public class ShiftReportService {
         }
         Integer late = null;
         if (ri.getDueTo() != null && ri.getDoneAt() != null && ri.getStatus() != RunItemStatus.SKIPPED) {
-            OffsetDateTime due = s.getShiftDate().atTime(ri.getDueTo()).atZone(ZONE).toOffsetDateTime();
+            OffsetDateTime due = ShiftClock.at(s.getShiftDate(), ri.getDueTo());
             long diff = Duration.between(due, ri.getDoneAt()).toMinutes();
             if (diff > 0) late = (int) diff;
         }

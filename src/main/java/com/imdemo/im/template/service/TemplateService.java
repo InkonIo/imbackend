@@ -6,6 +6,7 @@ import com.imdemo.im.repo.OutletRepository;
 import com.imdemo.im.repo.UserRepository;
 import com.imdemo.im.security.UserPrincipal;
 import com.imdemo.im.service.AuditService;
+import com.imdemo.im.service.ShiftClock;
 import com.imdemo.im.template.dto.TemplateDto.*;
 import com.imdemo.im.template.repository.ChecklistItemRepository;
 import com.imdemo.im.template.repository.ChecklistSectionRepository;
@@ -324,7 +325,8 @@ public class TemplateService {
     }
 
     private static void validate(ItemRequest r) {
-        if (r.dueFrom() != null && r.dueTo() != null && !r.dueFrom().isBefore(r.dueTo())) {
+        if (r.dueFrom() != null && r.dueTo() != null
+                && ShiftClock.order(r.dueFrom()) >= ShiftClock.order(r.dueTo())) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Время «с» должно быть раньше «до»");
         }
     }

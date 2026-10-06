@@ -9,6 +9,8 @@ import com.imdemo.im.repo.ShiftSessionRepository;
 import com.imdemo.im.review.domain.ReviewDecision;
 import com.imdemo.im.review.repository.ItemReviewRepository;
 import com.imdemo.im.service.ActivityStore;
+import com.imdemo.im.service.ShiftClock;
+
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -70,8 +72,7 @@ public class MetricsService {
                 .filter(i -> i.getDueTo() != null && i.getDoneAt() != null
                         && (i.getStatus() == RunItemStatus.DONE || i.getStatus() == RunItemStatus.PROBLEM))
                 .toList();
-        int onTime = count(withDue, i -> !i.getDoneAt().isAfter(
-                s.getShiftDate().atTime(i.getDueTo()).atZone(ZONE).toOffsetDateTime()));
+        int onTime = count(withDue, i -> !i.getDoneAt().isAfter(ShiftClock.at(s.getShiftDate(), i.getDueTo())));
         m.setDueTotal(withDue.size());
         m.setDueOnTime(onTime);
         m.setOnTimePct(withDue.isEmpty() ? null : pct(onTime, withDue.size()));

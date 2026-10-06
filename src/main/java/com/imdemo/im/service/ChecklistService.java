@@ -45,7 +45,8 @@ public class ChecklistService {
     private final FlagService flags;
     private final EntityManager em;
 
-     private final org.springframework.context.ApplicationEventPublisher publisher;
+    private final org.springframework.context.ApplicationEventPublisher publisher;
+    private final com.imdemo.im.inventory.repository.InventoryCountRepository inventoryCounts;
 
     public record PhotoFile(Path path, String contentType) {}
 
@@ -76,6 +77,7 @@ public class ChecklistService {
 
     private ChecklistRunItem copy(ChecklistRun run, ChecklistSection section, ChecklistItem item) {
         ChecklistRunItem ri = new ChecklistRunItem();
+        ri.setAction(item.getAction());
         ri.setInstructions(item.getInstructions());
         ri.setTelegramNotify(item.isTelegramNotify());
         ri.setRun(run);
@@ -162,8 +164,16 @@ public class ChecklistService {
                 if (ri.getPhotoMode() == PhotoMode.REQUIRED && !hasPhoto) {
                     throw new ApiException(HttpStatus.BAD_REQUEST, "Для этого пункта нужно фото");
                 }
+                if ("INVENTORY".equals(ri.getAction()) && !inventoryCounts.existsByOutletIdAndCountDateAndStatus(
+                        shiftOf(ri).getOutlet().getId(), shiftOf(ri).getShiftDate(),
+                        com.imdemo.im.inventory.domain.CountStatus.SUBMITTED)) {
+                    throw new ApiException(HttpStatus.BAD_REQUEST,
+                            "Сначала сдай инвентаризацию: раздел «📦 Инвентаризация»");
+                }
                 event = AuditEventType.ITEM_DONE;
                 details += timingDetails(ri, now);
+
+                
             }
             case PROBLEM -> {
                 requirePending(ri);
@@ -269,8 +279,8 @@ public class ChecklistService {
 
     private void ensureWindowOpen(ChecklistRunItem ri) {
         if (ri.getDueFrom() == null) return;
-        ZonedDateTime opensAt = shiftOf(ri).getShiftDate().atTime(ri.getDueFrom()).atZone(ZONE).minus(EARLY_GRACE);
-        if (ZonedDateTime.now(ZONE).isBefore(opensAt)) {
+        OffsetDateTime opensAt = ShiftClock.at(shiftOf(ri).getShiftDate(), ri.getDueFrom()).minus(EARLY_GRACE);
+        if (OffsetDateTime.now().isBefore(opensAt)) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Ещё рано: пункт доступен с " + ri.getDueFrom().format(HM));
         }
     }
@@ -328,6 +338,6 @@ public class ChecklistService {
         return new RunItemDto(ri.getId(), ri.getSectionOrder(), ri.getSectionTitle(), ri.getSortOrder(),
                 ri.getTitle(), ri.getInstructions(), ri.getDurationMin(), ri.getDueFrom(), ri.getDueTo(),
                 ri.getPhotoMode(), ri.isDirectorReview(), isTimed(ri),
-                ri.getStatus(), ri.getComment(), ri.getStartedAt(), ri.getDoneAt(), reopenUntil, photos);
+                ri.getStatus(), ri.getComment(), ri.getStartedAt(), ri.getDoneAt(), reopenUntil, photos, ri.getAction());
     }
 }

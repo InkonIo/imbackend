@@ -32,6 +32,8 @@ public class FlagService {
     static final Duration OLD_PHOTO = Duration.ofMinutes(15);
     static final Duration IDLE_LIMIT = Duration.ofMinutes(120);
 
+    static final int LATE_GRACE_MIN = 10; // опоздание до 10 минут не считается
+
     private final org.springframework.context.ApplicationEventPublisher publisher;
 
     private static final Map<FlagType, String> LABEL = Map.of(
@@ -71,9 +73,9 @@ public class FlagService {
         }
 
         if (ri.getStatus() != RunItemStatus.SKIPPED && ri.getDueTo() != null) {
-            OffsetDateTime due = s.getShiftDate().atTime(ri.getDueTo()).atZone(ZONE).toOffsetDateTime();
+            OffsetDateTime due = ShiftClock.at(s.getShiftDate(), ri.getDueTo());
             long late = Duration.between(due, now).toMinutes();
-            if (late > 0) {
+            if (late > LATE_GRACE_MIN) {
                 raiseOnce(s, ri, null, FlagType.LATE, "на " + human(Duration.ofMinutes(late))
                         + " позже срока " + ri.getDueTo().format(HM));
             }

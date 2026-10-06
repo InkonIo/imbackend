@@ -37,6 +37,8 @@ public class ShiftService {
     private final FlagService flagService;
     private final com.imdemo.im.analytics.service.MetricsService metricsService;
 
+    private final com.imdemo.im.schedule.repository.ScheduleSlotRepository scheduleSlots;
+
     @Transactional
     public ShiftDto start(Long userId, StartShiftRequest r) {
         AppUser u = users.findById(userId)
@@ -65,8 +67,10 @@ public class ShiftService {
         em.refresh(s);
 
         checklistService.createRun(s);
+                boolean planned = scheduleSlots.existsByUserIdAndOutletIdAndSlotDateAndDayPartAndRoleAndPublishedTrue(
+                u.getId(), o.getId(), s.getShiftDate(), r.dayPart(), r.shiftRole());
         audit.log(AuditEventType.SHIFT_STARTED, s, "shift", s.getId(),
-                r.shiftRole() + " · " + r.dayPart() + " · " + o.getName());
+                r.shiftRole() + " · " + r.dayPart() + " · " + o.getName() + (planned ? "" : " · вне графика"));
         return Mappers.shift(s);
     }
 

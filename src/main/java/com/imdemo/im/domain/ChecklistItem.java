@@ -55,4 +55,7 @@ public class ChecklistItem {
 
     @Column(name = "telegram_notify", nullable = false)
     private boolean telegramNotify;
+
+        @Column(length = 30)
+    private String action;
 }

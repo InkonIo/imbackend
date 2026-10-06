@@ -76,7 +76,7 @@ public final class Dto {
                              PhotoMode photoMode, boolean directorReview, boolean timed,
                              RunItemStatus status, String comment,
                              OffsetDateTime startedAt, OffsetDateTime doneAt, OffsetDateTime reopenUntil,
-                             List<PhotoDto> photos) {}
+                             List<PhotoDto> photos, String action) {}
 
     public record AuditEventDto(Long id, OffsetDateTime createdAt, AuditEventType type,
                                 Long userId, String userLogin, Long shiftId, Long outletId,

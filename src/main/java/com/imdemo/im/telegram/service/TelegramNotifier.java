@@ -126,6 +126,7 @@ public class TelegramNotifier {
         if (!tg.ready()) return;
         AuditFlag f = flags.findById(e.flagId()).orElse(null);
         if (f == null) return;
+        if (f.getType() == FlagType.LATE) return; // опоздания видны в отчёте и в «Ждут проверки», в чат не спамим
         ShiftSession s = shifts.findById(f.getShiftId()).orElse(null);
         if (s == null) return;
         ChecklistRunItem ri = f.getRunItemId() == null ? null : runItems.findById(f.getRunItemId()).orElse(null);
