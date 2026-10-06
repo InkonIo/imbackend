@@ -3,7 +3,12 @@ package com.imdemo.im.telegram.service;
 import com.imdemo.im.domain.AccountRole;
 import com.imdemo.im.domain.AppUser;
 import com.imdemo.im.domain.AuditFlag;
+import com.imdemo.im.domain.ChecklistRunItem;
+import com.imdemo.im.domain.FlagSeverity;
+import com.imdemo.im.domain.FlagType;
 import com.imdemo.im.domain.ReviewStatus;
+import com.imdemo.im.domain.RunItemStatus;
+import com.imdemo.im.repo.ChecklistRunItemRepository;
 import com.imdemo.im.repo.UserRepository;
 import com.imdemo.im.review.domain.FlagDecision;
 import com.imdemo.im.review.domain.ReviewDecision;
@@ -45,6 +50,7 @@ public class TelegramReviewHandler {
     private final ReviewService reviews;
     private final ReviewFlagRepository flagRepo;
     private final ItemReviewRepository itemReviews;
+    private final ChecklistRunItemRepository runItems;
 
     /** Ждём «свою причину» текстом: chatId → что решаем. */
     private record Pending(char kind, long id, Long messageId, Instant until) {}
@@ -85,14 +91,16 @@ public class TelegramReviewHandler {
                 }
                 case "rx" -> {
                     pending.remove(chatId);
-                    tg.editReplyMarkup(chatId, msgId, TelegramKeyboards.decision(p[1].charAt(0), id(p[2])));
+                    // вернуть все оставшиеся кнопки сообщения, а не только одну строку
+                    tg.editReplyMarkup(chatId, msgId, currentKeyboard(p[1].charAt(0), id(p[2])));
                     tg.answer(q.id(), "Отменено", false);
                 }
                 default -> tg.answer(q.id(), "Неизвестная кнопка", false);
             }
         } catch (ApiException e) {
             tg.answer(q.id(), e.getMessage(), true);
-            if (e.getStatus() == HttpStatus.CONFLICT) safe(() -> tg.editReplyMarkup(chatId, msgId, null));
+            // уже решено (на сайте или другим директором) → показать только то, что ещё осталось
+            if (e.getStatus() == HttpStatus.CONFLICT) safe(() -> refresh(chatId, msgId, p));
         } catch (Exception e) {
             log.warn("Telegram callback {}: {}", q.data(), e.getMessage());
             tg.answer(q.id(), "Не получилось. Попробуй в панели на сайте", true);
@@ -130,7 +138,9 @@ public class TelegramReviewHandler {
             }
         });
 
-        safe(() -> tg.editReplyMarkup(chatId, msgId, null));
+        // убрать только решённую строку, остальные кнопки оставить
+        safe(() -> tg.editReplyMarkup(chatId, msgId, currentKeyboard(kind, id)));
+
         String result = kind == 'i'
                 ? (positive ? "✅ Принято" : "❌ Не принято")
                 : (positive ? "👌 Флаг снят" : "🚩 Нарушение подтверждено");
@@ -138,6 +148,55 @@ public class TelegramReviewHandler {
         String text = result;
         safe(() -> tg.sendText(chatId, text, null, msgId));
         if (callbackId != null) tg.answer(callbackId, "Сохранено", false);
+    }
+
+    /** Что ещё можно решить по сообщению: строка проверки пункта + открытые флаги. null = ничего. */
+    private Map<String, Object> currentKeyboard(char kind, long id) {
+        Long runItemId = kind == 'i' ? Long.valueOf(id)
+                : flagRepo.findById(id).map(AuditFlag::getRunItemId).orElse(null);
+
+        if (runItemId == null) {
+            // флаг без пункта (пачкой, другое устройство…): одна строка, пока не решён
+            boolean open = kind == 'f' && flagRepo.findById(id)
+                    .map(f -> f.getReviewStatus() == ReviewStatus.OPEN)
+                    .orElse(false);
+            return open ? TelegramKeyboards.decision('f', id) : null;
+        }
+
+        ChecklistRunItem ri = runItems.findById(runItemId).orElse(null);
+        boolean closed = ri != null
+                && (ri.getStatus() == RunItemStatus.DONE || ri.getStatus() == RunItemStatus.PROBLEM);
+        Long reviewId = ri != null && closed && ri.isDirectorReview()
+                && itemReviews.findByRunItemId(runItemId).isEmpty() ? runItemId : null;
+
+        List<AuditFlag> open = flagRepo.findByRunItemIdOrderByIdAsc(runItemId).stream()
+                .filter(f -> f.getReviewStatus() == ReviewStatus.OPEN)
+                .filter(f -> f.getSeverity() != FlagSeverity.LOW)
+                .filter(f -> f.getType() != FlagType.LATE)
+                .toList();
+
+        return TelegramKeyboards.combined(reviewId, open);
+    }
+
+    /** Перерисовать кнопки по данным нажатой кнопки (после «уже проверено» и т.п.). */
+    private void refresh(long chatId, Long msgId, String[] p) {
+        char kind;
+        long id;
+        switch (p[0]) {
+            case "ia", "ir" -> {
+                kind = 'i';
+                id = id(p[1]);
+            }
+            case "fc", "fd" -> {
+                kind = 'f';
+                id = id(p[1]);
+            }
+            default -> { // rs:K:ID:N, rw:K:ID, rx:K:ID
+                kind = p[1].charAt(0);
+                id = id(p[2]);
+            }
+        }
+        tg.editReplyMarkup(chatId, msgId, currentKeyboard(kind, id));
     }
 
     private void ensureOpen(char kind, long id) {

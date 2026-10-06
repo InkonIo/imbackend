@@ -22,9 +22,12 @@ public interface ReviewFlagRepository extends JpaRepository<AuditFlag, Long> {
     long countByReviewStatusAndSeverityIn(ReviewStatus status, Collection<FlagSeverity> severities);
 
     long countByReviewStatusAndSeverityInAndOutletIdIn(
-            ReviewStatus status, Collection<FlagSeverity> severities, Collection<Long> outletIds);
+        ReviewStatus status, Collection<FlagSeverity> severities, Collection<Long> outletIds);
 
     List<AuditFlag> findByShiftIdAndReviewStatus(Long shiftId, ReviewStatus status);
 
     Optional<AuditFlag> findFirstByRunItemIdAndType(Long runItemId, FlagType type);
+
+    List<AuditFlag> findByRunItemIdOrderByIdAsc(Long runItemId);
+    
 }

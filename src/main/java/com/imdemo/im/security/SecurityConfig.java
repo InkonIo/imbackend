@@ -17,6 +17,7 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.List;
 
 @Configuration
@@ -33,8 +34,7 @@ public class SecurityConfig {
                         // внутренние пересылки на /error не должны превращать 403/500 в 401
                         .dispatcherTypeMatchers(DispatcherType.ERROR, DispatcherType.FORWARD).permitAll()
                         .requestMatchers("/error").permitAll()
-                        .requestMatchers("/api/auth/login",
-                                "/v3/api-docs/**", "/swagger-ui/**", "/swagger-ui.html").permitAll()
+                        .requestMatchers("/api/auth/login").permitAll()
                         .requestMatchers("/api/admin/**").hasRole("SUPER_ADMIN")
                         .requestMatchers("/api/audit/**").hasAnyRole("SUPER_ADMIN", "DIRECTOR")
                         .requestMatchers("/api/review/**").hasAnyRole("SUPER_ADMIN", "DIRECTOR")
@@ -61,11 +61,27 @@ public class SecurityConfig {
 
     @Bean
     public CorsConfigurationSource corsConfigurationSource(
-            @Value("${app.cors.origins}") List<String> origins) {
+            @Value("${app.cors.origins:}") List<String> extraOrigins) {
+
+        List<String> origins = new ArrayList<>(List.of(
+                // локальная разработка
+                "http://localhost:5173",
+                "http://127.0.0.1:5173",
+                // Vercel: основной домен и автоматические адреса деплоев
+                "https://imfront.vercel.app",
+                "https://imfront-git-master-lokuis-projects.vercel.app",
+                "https://imfront-o39zli455-lokuis-projects.vercel.app",
+                // все будущие деплои и превью этого проекта
+                "https://imfront-*-lokuis-projects.vercel.app"
+        ));
+        extraOrigins.stream().filter(o -> !o.isBlank()).forEach(origins::add);
+
         CorsConfiguration cfg = new CorsConfiguration();
-        cfg.setAllowedOrigins(origins);
-        cfg.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+        cfg.setAllowedOriginPatterns(origins);
+        cfg.setAllowedMethods(List.of("GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"));
         cfg.setAllowedHeaders(List.of("Authorization", "Content-Type", "X-Device-Id"));
+        cfg.setMaxAge(3600L);
+
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", cfg);
         return source;
