@@ -249,6 +249,42 @@ public class TimetrackerService {
         }
     }
 
+    /** Ответ Таймтрекера на запись: статус и тело (для журнала). */
+    public record TtResp(int status, String body) {}
+
+    /** GET любого пути API (с уже закодированными скобками). Бросает ошибку при не-2xx. */
+    public String ttGet(String pathAndQuery) {
+        return getJson(baseUrl + pathAndQuery);
+    }
+
+    /** PATCH JSON. При 401/403 один раз входит заново. Не бросает ошибку на не-2xx, чтобы вызывающий записал её в журнал. */
+    public TtResp ttPatch(String path, String json) {
+        TtResp r = patchOnce(baseUrl + path, json, currentToken());
+        if ((r.status() == 401 || r.status() == 403) && hasCredentials()) {
+            cachedToken = null;
+            r = patchOnce(baseUrl + path, json, currentToken());
+        }
+        return r;
+    }
+
+    private TtResp patchOnce(String url, String json, String bearer) {
+        try {
+            HttpRequest req = HttpRequest.newBuilder(URI.create(url))
+                .timeout(Duration.ofSeconds(60))
+                .header("Authorization", "Bearer " + bearer)
+                .header("Accept", "application/json")
+                .header("Content-Type", "application/json")
+                .method("PATCH", HttpRequest.BodyPublishers.ofString(json)).build();
+            HttpResponse<String> resp = http.send(req, HttpResponse.BodyHandlers.ofString());
+            return new TtResp(resp.statusCode(), resp.body());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Запрос прерван");
+        } catch (Exception e) {
+            throw new ResponseStatusException(HttpStatus.BAD_GATEWAY, "Не удалось достучаться до таймтрекера: " + e.getMessage());
+        }
+    }
+
     /** Загружает план и факт по дням за месяц (YYYY-MM). Заодно обновляет сотрудников. */
     public Map<String, Object> syncSchedule(String month) {
         if (!hasCredentials() && (token == null || token.isBlank())) {
@@ -304,8 +340,9 @@ public class TimetrackerService {
                    to_char(d.plan_start, 'HH24:MI') AS "planStart", to_char(d.plan_end, 'HH24:MI') AS "planEnd",
                    to_char(d.fact_in AT TIME ZONE 'Asia/Almaty', 'HH24:MI') AS "factIn",
                    to_char(d.fact_out AT TIME ZONE 'Asia/Almaty', 'HH24:MI') AS "factOut",
-                   d.worked_min AS "workedMin"
-            FROM ext_sheet_day d JOIN ext_employee e ON e.id = d.employee_id
+                   d.worked_min AS "workedMin", d.edited,
+                   d.tt_type AS "ttType", to_char(d.tt_start, 'HH24:MI') AS "ttStart", to_char(d.tt_end, 'HH24:MI') AS "ttEnd"
+            FROM ext_sheet_day_eff d JOIN ext_employee e ON e.id = d.employee_id
             WHERE d.day BETWEEN :from AND :to AND NOT e.is_fired
               AND (CAST(:branch AS bigint) IS NULL OR e.branch_id = CAST(:branch AS bigint))
             """, p);
@@ -329,7 +366,7 @@ public class TimetrackerService {
                       THEN extract(epoch FROM ((s.day + s.plan_end + CASE WHEN s.plan_end <= s.plan_start THEN interval '1 day' ELSE interval '0' END)
                                                - (s.fact_out AT TIME ZONE 'Asia/Almaty'))) / 60 END AS early_min,
                  (s.day <= (now() AT TIME ZONE 'Asia/Almaty')::date) AS past
-          FROM ext_sheet_day s
+          FROM ext_sheet_day_eff s
           JOIN ext_employee e ON e.id = s.employee_id
           LEFT JOIN ext_position pos ON pos.id = e.position_id
           WHERE s.day BETWEEN :from AND :to AND NOT e.is_fired

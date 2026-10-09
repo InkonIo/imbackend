@@ -15,7 +15,10 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
+import com.imdemo.im.domain.AccountRole;
 import com.imdemo.im.security.UserPrincipal;
+import com.imdemo.im.web.error.ApiException;
+import org.springframework.http.HttpStatus;
 
 /**
  * Автосборка графика. Путь /api/sched/** закрыт от сотрудников в SecurityConfig,
@@ -32,6 +35,17 @@ public class SchedPlanController {
         this.plan = plan;
         this.kln = kln;
         this.access = access;
+    }
+
+    /** Общий график видят директор, супер-админ и ответственная за расписание. */
+    @GetMapping("/api/sched/plan/overview")
+    public Map<String, Object> overview(@AuthenticationPrincipal UserPrincipal p, @RequestParam long branchId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(defaultValue = "7") int days) {
+        if (!(access.canManage(p) || (p != null && p.role() == AccountRole.DIRECTOR))) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Нет доступа к общему графику");
+        }
+        return plan.overview(branchId, from, days);
     }
 
     // ---------- справочники и настройки

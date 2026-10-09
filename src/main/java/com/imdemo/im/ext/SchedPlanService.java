@@ -48,6 +48,9 @@ public class SchedPlanService {
     private static final String MANAGER_ACCESS = "ARRAY['director','shiftManager','plotManager','scheduleManager','departmentLeader',"
         + "'deputyDirector','serviceLeader','HRSpecialist','technician']::text[]";
 
+    /** Должность в Таймтрекере: менеджеры и директора ходят по своему графику (проверка и по kln, и по названию должности). */
+    private static final String MANAGER_TITLE_SQL = "EXISTS (SELECT 1 FROM ext_position pp WHERE pp.id = e.position_id AND pp.title ~ '([Мм]енеджер|[Дд]иректор|[Уу]правляющ)')";
+
     private static final Pattern HHMM = Pattern.compile("^([01]?\\d|2[0-3]):[0-5]\\d$");
     private static final Set<String> PARTS = Set.of("MORNING", "MID", "EVENING", "NIGHT");
 
@@ -199,12 +202,12 @@ public class SchedPlanService {
     public List<Map<String, Object>> employees(long branchId) {
         List<Map<String, Object>> list = jdbc.queryForList("""
             SELECT e.id, e.full_name AS "name",
-                   EXISTS (SELECT 1 FROM kln_user k WHERE k.employee_id = e.id AND k.accesses && %s) AS "isManager",
+                   (EXISTS (SELECT 1 FROM kln_user k WHERE k.employee_id = e.id AND k.accesses && %s) OR %s) AS "isManager",
                    EXISTS (SELECT 1 FROM kln_user k WHERE k.employee_id = e.id AND 'instructor' = ANY (k.accesses)) AS "isInstructor",
                    EXISTS (SELECT 1 FROM kln_user k WHERE k.employee_id = e.id) AS "inKln",
                    EXISTS (SELECT 1 FROM kln_link l WHERE l.employee_id = e.id) AS "manualLink"
             FROM ext_employee e WHERE e.branch_id = :b AND NOT e.is_fired ORDER BY e.full_name
-            """.formatted(MANAGER_ACCESS), p("b", branchId));
+            """.formatted(MANAGER_ACCESS, MANAGER_TITLE_SQL), p("b", branchId));
         Map<Long, List<Map<String, Object>>> pos = new HashMap<>();
         for (Map<String, Object> r : jdbc.queryForList("""
             SELECT p.employee_id AS "eid", p.position_code AS "code", p.source FROM emp_position p
@@ -243,7 +246,7 @@ public class SchedPlanService {
     public List<Map<String, Object>> trainings(long branchId) {
         return jdbc.queryForList("""
             SELECT t.id, t.instructor_id AS "instructorId", i.full_name AS "instructor",
-                   t.trainee_id AS "traineeId", s.full_name AS "trainee",
+                   t.trainee_id AS "traineeId", coalesce(s.full_name, t.trainee_name) AS "trainee",
                    to_char(t.date_from, 'YYYY-MM-DD') AS "from", to_char(t.date_to, 'YYYY-MM-DD') AS "to",
                    to_char(t.start_time, 'HH24:MI') AS "start", to_char(t.end_time, 'HH24:MI') AS "end", t.comment
             FROM plan_training t JOIN ext_employee i ON i.id = t.instructor_id LEFT JOIN ext_employee s ON s.id = t.trainee_id
@@ -252,7 +255,7 @@ public class SchedPlanService {
             """, p("b", branchId));
     }
 
-    public record TrainingIn(long instructorId, Long traineeId, String from, String to, String start, String end, String comment) {}
+    public record TrainingIn(long instructorId, Long traineeId, String traineeName, String from, String to, String start, String end, String comment) {}
 
     public long addTraining(UserPrincipal u, long branchId, TrainingIn t) {
         requireBranch(branchId);
@@ -269,12 +272,15 @@ public class SchedPlanService {
         toMin(st);
         toMin(en);
         if (t.traineeId() != null && t.traineeId() == t.instructorId()) throw bad("Инструктор и стажёр — один человек");
+        String tn = t.traineeName() == null ? null : t.traineeName().trim();
+        if (tn != null && tn.length() > 120) throw bad("Имя стажёра длиннее 120 символов");
+        if (t.traineeId() != null) tn = null;
         String c = t.comment() == null ? null : t.comment().trim();
         if (c != null && c.length() > 300) throw bad("Комментарий длиннее 300 символов");
         Long id = jdbc.queryForObject("""
-            INSERT INTO plan_training (branch_id, instructor_id, trainee_id, date_from, date_to, start_time, end_time, comment, created_by)
-            VALUES (:b, :i, :s, :f, :t, CAST(:st AS time), CAST(:en AS time), :c, :u) RETURNING id
-            """, p("b", branchId, "i", t.instructorId(), "s", t.traineeId(), "f", d(from), "t", d(to), "st", st, "en", en,
+            INSERT INTO plan_training (branch_id, instructor_id, trainee_id, trainee_name, date_from, date_to, start_time, end_time, comment, created_by)
+            VALUES (:b, :i, :s, :tn, :f, :t, CAST(:st AS time), CAST(:en AS time), :c, :u) RETURNING id
+            """, p("b", branchId, "i", t.instructorId(), "s", t.traineeId(), "tn", tn == null || tn.isEmpty() ? null : tn, "f", d(from), "t", d(to), "st", st, "en", en,
                 "c", c == null || c.isEmpty() ? null : c, "u", u.id()), Long.class);
         return id == null ? 0 : id;
     }
@@ -308,7 +314,8 @@ public class SchedPlanService {
             SELECT e.id FROM ext_employee e
             WHERE e.branch_id = :b AND NOT e.is_fired
               AND NOT EXISTS (SELECT 1 FROM kln_user k WHERE k.employee_id = e.id AND k.accesses && %s)
-            """.formatted(MANAGER_ACCESS), p("b", branchId))) {
+              AND NOT %s
+            """.formatted(MANAGER_ACCESS, MANAGER_TITLE_SQL), p("b", branchId))) {
             long id = ((Number) r.get("id")).longValue();
             emps.add(new Emp(id, names.getOrDefault(id, "#" + id), posOf.getOrDefault(id, new HashSet<>())));
         }
@@ -318,7 +325,7 @@ public class SchedPlanService {
         List<Map<String, Object>> view = new ArrayList<>();
         for (Map<String, Object> r : jdbc.queryForList("""
             SELECT d.employee_id AS "eid", to_char(d.day, 'YYYY-MM-DD') AS "day", d.type
-            FROM ext_sheet_day d JOIN ext_employee e ON e.id = d.employee_id
+            FROM ext_sheet_day_eff d JOIN ext_employee e ON e.id = d.employee_id
             WHERE e.branch_id = :b AND d.day BETWEEN :f AND :t AND d.type ~* :ns
             """, p("b", branchId, "f", d(from), "t", d(to), "ns", NOT_SHIFT))) {
             long eid = ((Number) r.get("eid")).longValue();
@@ -365,7 +372,7 @@ public class SchedPlanService {
             SELECT d.employee_id AS "eid", to_char(d.day, 'YYYY-MM-DD') AS "day",
                    (extract(hour FROM d.plan_start) * 60 + extract(minute FROM d.plan_start))::int AS "s",
                    (extract(hour FROM d.plan_end) * 60 + extract(minute FROM d.plan_end))::int AS "e"
-            FROM ext_sheet_day d JOIN ext_employee e ON e.id = d.employee_id
+            FROM ext_sheet_day_eff d JOIN ext_employee e ON e.id = d.employee_id
             WHERE e.branch_id = :b AND d.day BETWEEN :f AND :t AND d.plan_start IS NOT NULL AND d.plan_end IS NOT NULL
               AND coalesce(d.type, '') !~* :ns
             """, p("b", branchId, "f", d(from.minusDays(7)), "t", d(from.minusDays(1)), "ns", NOT_SHIFT_OR_WEEKEND))) {
@@ -635,6 +642,109 @@ public class SchedPlanService {
     public int deleteShift(long draftId, long shiftId) {
         openDraft(draftId);
         return jdbc.update("DELETE FROM plan_draft_shift WHERE id = :s AND draft_id = :d", p("s", shiftId, "d", draftId));
+    }
+
+    // ============================================================ общий график (все: менеджеры и сотрудники)
+
+    /**
+     * Кто когда во сколько и на какой позиции. Время берём из нашего графика (опубликованного, иначе черновика),
+     * а если там пусто — из Таймтрекера. Если наш график и Таймтрекер расходятся, отдаём ttStart/ttEnd.
+     */
+    public Map<String, Object> overview(long branchId, LocalDate from, int days) {
+        requireBranch(branchId);
+        if (days < 1 || days > 14) throw bad("Дней от 1 до 14");
+        LocalDate to = from.plusDays(days - 1L);
+        List<String> dayList = new ArrayList<>();
+        for (int i = 0; i < days; i++) dayList.add(from.plusDays(i).toString());
+
+        List<Map<String, Object>> people = jdbc.queryForList("""
+            SELECT e.id, e.full_name AS "name",
+                   CASE WHEN EXISTS (SELECT 1 FROM kln_user k WHERE k.employee_id = e.id AND k.accesses && %s) OR %s THEN 'MANAGER'
+                        WHEN EXISTS (SELECT 1 FROM kln_user k WHERE k.employee_id = e.id AND 'instructor' = ANY (k.accesses)) THEN 'INSTRUCTOR'
+                        ELSE 'STAFF' END AS "role"
+            FROM ext_employee e WHERE e.branch_id = :b AND NOT e.is_fired
+            ORDER BY e.full_name
+            """.formatted(MANAGER_ACCESS, MANAGER_TITLE_SQL), p("b", branchId));
+
+        Map<String, Map<String, Object>> tt = new HashMap<>();
+        for (Map<String, Object> r : jdbc.queryForList("""
+            SELECT d.employee_id AS "eid", to_char(d.day, 'YYYY-MM-DD') AS "day", d.type,
+                   to_char(d.plan_start, 'HH24:MI') AS "start", to_char(d.plan_end, 'HH24:MI') AS "end"
+            FROM ext_sheet_day_eff d JOIN ext_employee e ON e.id = d.employee_id
+            WHERE e.branch_id = :b AND d.day BETWEEN :f AND :t
+            """, p("b", branchId, "f", d(from), "t", d(to)))) {
+            tt.put(r.get("eid") + "|" + r.get("day"), r);
+        }
+        Map<String, Map<String, Object>> mine = new HashMap<>();
+        for (Map<String, Object> r : jdbc.queryForList("""
+            SELECT s.employee_id AS "eid", to_char(s.day, 'YYYY-MM-DD') AS "day", s.position_code AS "pos",
+                   to_char(s.start_time, 'HH24:MI') AS "start", to_char(s.end_time, 'HH24:MI') AS "end", d.status
+            FROM plan_draft_shift s JOIN plan_draft d ON d.id = s.draft_id
+            WHERE d.branch_id = :b AND d.status IN ('PUBLISHED', 'DRAFT') AND s.employee_id IS NOT NULL AND s.day BETWEEN :f AND :t
+            ORDER BY (d.status = 'PUBLISHED') DESC, d.id DESC, s.id
+            """, p("b", branchId, "f", d(from), "t", d(to)))) {
+            mine.putIfAbsent(r.get("eid") + "|" + r.get("day"), r);
+        }
+
+        List<Map<String, Object>> rows = new ArrayList<>();
+        for (Map<String, Object> pr : people) {
+            long id = ((Number) pr.get("id")).longValue();
+            List<Map<String, Object>> cells = new ArrayList<>();
+            boolean any = false;
+            for (String day : dayList) {
+                Map<String, Object> m = mine.get(id + "|" + day);
+                Map<String, Object> t2 = tt.get(id + "|" + day);
+                Map<String, Object> cell = null;
+                String ttType = t2 == null ? null : (String) t2.get("type");
+                boolean ttAbsent = ttType != null && ttType.matches("(?i).*" + NOT_SHIFT + ".*");
+                boolean ttShift = t2 != null && !ttAbsent && t2.get("start") != null && t2.get("end") != null
+                    && !"weekend".equalsIgnoreCase(ttType);
+                if (m != null) {
+                    cell = new LinkedHashMap<>();
+                    cell.put("kind", "SHIFT");
+                    cell.put("start", m.get("start"));
+                    cell.put("end", m.get("end"));
+                    cell.put("pos", m.get("pos"));
+                    cell.put("src", "PUBLISHED".equals(m.get("status")) ? "PUB" : "DRAFT");
+                    if (ttShift && (!m.get("start").equals(t2.get("start")) || !m.get("end").equals(t2.get("end")))) {
+                        cell.put("ttStart", t2.get("start"));
+                        cell.put("ttEnd", t2.get("end"));
+                    }
+                    if (!ttShift && ttAbsent) cell.put("ttNote", ttType);
+                } else if (ttAbsent) {
+                    cell = new LinkedHashMap<>();
+                    cell.put("kind", "ABSENCE");
+                    cell.put("note", ttType);
+                } else if (t2 != null && "weekend".equalsIgnoreCase(ttType)) {
+                    cell = new LinkedHashMap<>();
+                    cell.put("kind", "OFF");
+                } else if (ttShift) {
+                    cell = new LinkedHashMap<>();
+                    cell.put("kind", "SHIFT");
+                    cell.put("start", t2.get("start"));
+                    cell.put("end", t2.get("end"));
+                    cell.put("src", "TT");
+                }
+                if (cell != null && !"OFF".equals(cell.get("kind"))) any = true;
+                cells.add(cell);
+            }
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("id", id);
+            row.put("name", pr.get("name"));
+            row.put("role", pr.get("role"));
+            row.put("cells", cells);
+            row.put("any", any);
+            rows.add(row);
+        }
+        String synced = jdbc.queryForObject("""
+            SELECT to_char(max(d.synced_at) AT TIME ZONE 'Asia/Almaty', 'DD.MM HH24:MI')
+            FROM ext_sheet_day_eff d JOIN ext_employee e ON e.id = d.employee_id WHERE e.branch_id = :b
+            """, p("b", branchId), String.class);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("days", dayList);
+        out.put("rows", rows);
+        out.put("ttSyncedAt", synced);
+        return out;
     }
 
     // ============================================================ публикация

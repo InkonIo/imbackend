@@ -78,7 +78,7 @@ public class EmployeeService {
                    coalesce(s.worked_min, 0) AS "workedMin",
                    (s.type IS DISTINCT FROM 'weekend' AND s.plan_start IS NOT NULL
                      AND coalesce(s.type, '') !~* '%s') AS planned
-            FROM ext_sheet_day s WHERE s.employee_id = :e AND s.day BETWEEN :from AND :to ORDER BY s.day
+            FROM ext_sheet_day_eff s WHERE s.employee_id = :e AND s.day BETWEEN :from AND :to ORDER BY s.day
             """.formatted(NOT_SHIFT), ps);
 
         Map<String, Object> stats = jdbc.queryForMap("""
@@ -88,7 +88,7 @@ public class EmployeeService {
                      (s.day <= (now() AT TIME ZONE 'Asia/Almaty')::date) AS past,
                      CASE WHEN s.fact_in IS NOT NULL AND s.plan_start IS NOT NULL
                           THEN extract(epoch FROM ((s.fact_in AT TIME ZONE 'Asia/Almaty') - (s.day + s.plan_start))) / 60 END AS late_min
-              FROM ext_sheet_day s WHERE s.employee_id = :e AND s.day BETWEEN :from AND :to
+              FROM ext_sheet_day_eff s WHERE s.employee_id = :e AND s.day BETWEEN :from AND :to
             )
             SELECT count(*) FILTER (WHERE planned)::int AS planned,
                    count(*) FILTER (WHERE planned AND past)::int AS "plannedPast",
@@ -111,7 +111,7 @@ public class EmployeeService {
         // ближайшая смена (в пределах 30 дней, не обязательно в этом месяце)
         List<Map<String, Object>> next = jdbc.queryForList("""
             SELECT to_char(s.day, 'YYYY-MM-DD') AS date, to_char(s.plan_start, 'HH24:MI') AS "planStart", to_char(s.plan_end, 'HH24:MI') AS "planEnd"
-            FROM ext_sheet_day s
+            FROM ext_sheet_day_eff s
             WHERE s.employee_id = :e AND s.day >= (now() AT TIME ZONE 'Asia/Almaty')::date
               AND s.type IS DISTINCT FROM 'weekend' AND s.plan_start IS NOT NULL AND coalesce(s.type, '') !~* '%s'
               AND (s.fact_in IS NULL OR s.day > (now() AT TIME ZONE 'Asia/Almaty')::date)
@@ -133,7 +133,7 @@ public class EmployeeService {
                    to_char(s.plan_start, 'HH24:MI') AS "planStart", to_char(s.plan_end, 'HH24:MI') AS "planEnd"
             FROM ext_employee me
             JOIN ext_employee o ON o.branch_id = me.branch_id AND o.id <> me.id AND NOT o.is_fired
-            JOIN ext_sheet_day s ON s.employee_id = o.id AND s.day = :day
+            JOIN ext_sheet_day_eff s ON s.employee_id = o.id AND s.day = :day
             LEFT JOIN ext_position pos ON pos.id = o.position_id
             WHERE me.id = :me AND s.type IS DISTINCT FROM 'weekend' AND s.plan_start IS NOT NULL
               AND coalesce(s.type, '') !~* '%s'

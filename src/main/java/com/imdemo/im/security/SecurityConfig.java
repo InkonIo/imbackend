@@ -39,6 +39,8 @@ public class SecurityConfig {
                         .dispatcherTypeMatchers(DispatcherType.ERROR, DispatcherType.FORWARD).permitAll()
                         .requestMatchers("/error").permitAll()
                         .requestMatchers("/api/auth/login").permitAll()
+                        // Swagger: сама страница открыта, но запросы из неё к API всё равно требуют токен (кнопка Authorize)
+                        .requestMatchers("/swagger-ui/**", "/swagger-ui.html", "/v3/api-docs/**").permitAll()
 
                         // доступно всем вошедшим, включая сотрудника
                         .requestMatchers("/api/auth/**", "/api/me/caps").authenticated()

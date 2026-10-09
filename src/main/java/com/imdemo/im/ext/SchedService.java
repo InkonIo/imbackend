@@ -83,16 +83,16 @@ public class SchedService {
                    to_char(r.time_from, 'HH24:MI') AS "timeFrom", to_char(r.time_to, 'HH24:MI') AS "timeTo",
                    r.comment, r.status, r.decision_note AS "decisionNote", r.created_at AS "createdAt",
                    du.full_name AS "decidedBy",
-                   (SELECT count(*) FROM ext_sheet_day s WHERE s.employee_id = r.employee_id AND s.day BETWEEN r.date_from AND r.date_to
+                   (SELECT count(*) FROM ext_sheet_day_eff s WHERE s.employee_id = r.employee_id AND s.day BETWEEN r.date_from AND r.date_to
                       AND s.type IS DISTINCT FROM 'weekend' AND s.plan_start IS NOT NULL AND coalesce(s.type, '') !~* '%1$s')::int AS "myShifts",
                    (SELECT min(c.n) FROM (
                        SELECT g::date AS day,
-                              (SELECT count(*) FROM ext_sheet_day s2 JOIN ext_employee o ON o.id = s2.employee_id
+                              (SELECT count(*) FROM ext_sheet_day_eff s2 JOIN ext_employee o ON o.id = s2.employee_id
                                 WHERE s2.day = g::date AND o.branch_id = e.branch_id AND o.id <> e.id AND NOT o.is_fired
                                   AND s2.type IS DISTINCT FROM 'weekend' AND s2.plan_start IS NOT NULL
                                   AND coalesce(s2.type, '') !~* '%1$s') AS n
                        FROM generate_series(r.date_from, r.date_to, interval '1 day') g
-                       WHERE EXISTS (SELECT 1 FROM ext_sheet_day m WHERE m.employee_id = r.employee_id AND m.day = g::date
+                       WHERE EXISTS (SELECT 1 FROM ext_sheet_day_eff m WHERE m.employee_id = r.employee_id AND m.day = g::date
                                        AND m.type IS DISTINCT FROM 'weekend' AND m.plan_start IS NOT NULL
                                        AND coalesce(m.type, '') !~* '%1$s')) c)::int AS "minOthers"
             FROM emp_request r
