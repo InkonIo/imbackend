@@ -321,7 +321,7 @@ public class TimetrackerService {
         WITH d AS (
           SELECT e.id AS emp, e.full_name, pos.title AS position, s.day, s.type, s.plan_start, s.plan_end, s.worked_min,
                  (s.type IS DISTINCT FROM 'weekend' AND s.plan_start IS NOT NULL
-                  AND coalesce(s.type, '') !~* '(vac|sick|leave|trip|holiday|celeb|before|fire|dismiss)') AS planned,
+                  AND coalesce(s.type, '') !~* '(vac|sick|leave|trip|holiday|celeb|before|fire|dismiss|inweekend)') AS planned,
                  (s.fact_in IS NOT NULL) AS came,
                  CASE WHEN s.fact_in IS NOT NULL AND s.plan_start IS NOT NULL
                       THEN extract(epoch FROM ((s.fact_in AT TIME ZONE 'Asia/Almaty') - (s.day + s.plan_start))) / 60 END AS late_min,

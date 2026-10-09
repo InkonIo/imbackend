@@ -573,7 +573,7 @@ public class ScheduleService {
     private List<Person> staffOf(Long outletId) {
         List<AppUser> list = users.findAll().stream()
                 .filter(AppUser::isActive)
-                .filter(u -> u.getAccountRole() != AccountRole.SUPER_ADMIN)
+                .filter(u -> u.getAccountRole() == AccountRole.MANAGER || u.getAccountRole() == AccountRole.DIRECTOR)
                 .filter(u -> u.getOutlets().stream().anyMatch(o -> o.getId().equals(outletId)))
                 .sorted(Comparator.comparing(AppUser::getFullName))
                 .toList();

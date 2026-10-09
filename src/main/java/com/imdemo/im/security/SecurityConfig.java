@@ -1,11 +1,14 @@
 package com.imdemo.im.security;
 
+import com.imdemo.im.ext.SchedAccess;
 import com.imdemo.im.repo.UserRepository;
+
 import jakarta.servlet.DispatcherType;
 import jakarta.servlet.http.HttpServletResponse;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.Customizer;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
@@ -25,7 +28,8 @@ public class SecurityConfig {
 
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http, JwtService jwtService,
-                                           UserRepository userRepository) throws Exception {
+                                           UserRepository userRepository,
+                                           SchedAccess sched) throws Exception {
         http
                 .cors(Customizer.withDefaults())
                 .csrf(AbstractHttpConfigurer::disable)
@@ -35,16 +39,32 @@ public class SecurityConfig {
                         .dispatcherTypeMatchers(DispatcherType.ERROR, DispatcherType.FORWARD).permitAll()
                         .requestMatchers("/error").permitAll()
                         .requestMatchers("/api/auth/login").permitAll()
+
+                        // доступно всем вошедшим, включая сотрудника
+                        .requestMatchers("/api/auth/**", "/api/me/caps").authenticated()
+                        // только сотрудник
+                        .requestMatchers("/api/employee/**").hasRole("EMPLOYEE")
+
+                        // дальше всё закрыто от сотрудника
                         .requestMatchers("/api/admin/**").hasRole("SUPER_ADMIN")
                         .requestMatchers("/api/audit/**").hasAnyRole("SUPER_ADMIN", "DIRECTOR")
                         .requestMatchers("/api/review/**").hasAnyRole("SUPER_ADMIN", "DIRECTOR")
                         .requestMatchers("/api/templates/**").hasAnyRole("SUPER_ADMIN", "DIRECTOR")
-                        .requestMatchers("/api/schedule/my", "/api/schedule/today", "/api/schedule/me/**").authenticated()
+                        .requestMatchers("/api/schedule/my", "/api/schedule/today", "/api/schedule/me/**").access(sched.notEmployee())
                         .requestMatchers("/api/schedule/**").hasAnyRole("SUPER_ADMIN", "DIRECTOR")
                         .requestMatchers("/api/insights/**").hasAnyRole("SUPER_ADMIN", "DIRECTOR")
                         .requestMatchers("/api/shelf-life/admin/**").hasAnyRole("SUPER_ADMIN", "DIRECTOR")
+
+                        // график и список сотрудников из Таймтрекера: админ, директор и назначенная ответственная
+                        .requestMatchers(HttpMethod.GET, "/api/ext/schedule", "/api/ext/employees").access(sched.adminDirectorOrOwner())
+                        .requestMatchers(HttpMethod.POST, "/api/ext/sync-schedule").access(sched.adminDirectorOrOwner())
                         .requestMatchers("/api/ext/**").hasAnyRole("SUPER_ADMIN", "DIRECTOR")
-                        .anyRequest().authenticated())
+
+                        // заявки сотрудников: внутри каждый метод ещё проверяет право
+                        .requestMatchers("/api/sched/**").access(sched.notEmployee())
+
+                        // всё остальное: любой вошедший, кроме сотрудника
+                        .anyRequest().access(sched.notEmployee()))
                 .exceptionHandling(e -> e
                         // 401: нет токена или он невалиден → фронт отправит на вход
                         .authenticationEntryPoint((req, res, ex) -> writeJson(res, 401, "Нужно войти заново"))

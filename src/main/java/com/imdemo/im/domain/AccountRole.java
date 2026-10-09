@@ -1,3 +1,3 @@
 package com.imdemo.im.domain;
 
-public enum AccountRole { SUPER_ADMIN, DIRECTOR, MANAGER }
+public enum AccountRole { SUPER_ADMIN, DIRECTOR, MANAGER, EMPLOYEE }

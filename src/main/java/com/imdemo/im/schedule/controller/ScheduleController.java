@@ -1,7 +1,7 @@
 package com.imdemo.im.schedule.controller;
 
 import com.imdemo.im.schedule.dto.ScheduleDto.*;
-import com.imdemo.im.schedule.service.ScheduleService;
+import com.imdemo.im.schedule.service.*;
 import com.imdemo.im.security.UserPrincipal;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
