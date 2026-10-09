@@ -43,7 +43,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/schedule/**").hasAnyRole("SUPER_ADMIN", "DIRECTOR")
                         .requestMatchers("/api/insights/**").hasAnyRole("SUPER_ADMIN", "DIRECTOR")
                         .requestMatchers("/api/shelf-life/admin/**").hasAnyRole("SUPER_ADMIN", "DIRECTOR")
-                        .requestMatchers("/api/ext/**").hasRole("SUPER_ADMIN")
+                        .requestMatchers("/api/ext/**").hasAnyRole("SUPER_ADMIN", "DIRECTOR")
                         .anyRequest().authenticated())
                 .exceptionHandling(e -> e
                         // 401: нет токена или он невалиден → фронт отправит на вход

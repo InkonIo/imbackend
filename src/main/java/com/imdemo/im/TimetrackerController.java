@@ -26,6 +26,25 @@ public class TimetrackerController {
         return service.list(q, branchId, fired);
     }
 
+    @GetMapping("/schedule")
+    public Map<String, Object> schedule(
+            @RequestParam(required = false) String month,
+            @RequestParam(required = false) Long branchId) {
+        return service.schedule(month, branchId);
+    }
+
+    @GetMapping("/analytics")
+    public Map<String, Object> analytics(
+            @RequestParam(required = false) String month,
+            @RequestParam(required = false) Long branchId) {
+        return service.analytics(month, branchId);
+    }
+
+    @PostMapping("/sync-schedule")
+    public Map<String, Object> syncSchedule(@RequestParam(required = false) String month) {
+        return service.syncSchedule(month);
+    }
+
     @PostMapping("/sync")
     public Map<String, Object> sync() {
         return service.syncEmployees();
