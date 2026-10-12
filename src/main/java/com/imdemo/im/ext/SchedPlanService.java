@@ -104,7 +104,9 @@ public class SchedPlanService {
     }
 
     private LocalDate defaultStart() {
-        return LocalDate.now(ZoneId.of("Asia/Almaty")).plusDays(1);
+        LocalDate t = LocalDate.now(ZoneId.of("Asia/Almaty"));
+        // пока идёт неделя W, составляется W+2 (понедельник через две недели)
+        return t.minusDays(t.getDayOfWeek().getValue() - 1L).plusDays(14);
     }
 
     private void requireBranch(long branchId) {
@@ -376,6 +378,20 @@ public class SchedPlanService {
             WHERE e.branch_id = :b AND d.day BETWEEN :f AND :t AND d.plan_start IS NOT NULL AND d.plan_end IS NOT NULL
               AND coalesce(d.type, '') !~* :ns
             """, p("b", branchId, "f", d(from.minusDays(7)), "t", d(from.minusDays(1)), "ns", NOT_SHIFT_OR_WEEKEND))) {
+            int s = ((Number) r.get("s")).intValue();
+            int e = normEnd(s, ((Number) r.get("e")).intValue());
+            hist.add(new Hist(((Number) r.get("eid")).longValue(), LocalDate.parse((String) r.get("day")), s, e));
+        }
+        // опубликованные у нас недели (в Таймтрекере их может ещё не быть: график составляют на две недели вперёд);
+        // добавляются после данных Таймтрекера и для того же дня их заменяют
+        for (Map<String, Object> r : jdbc.queryForList("""
+            SELECT s.employee_id AS "eid", to_char(s.day, 'YYYY-MM-DD') AS "day",
+                   s.start_min AS "s", ((s.start_min + s.dur_min) % 1440) AS "e"
+            FROM plan_shift_eff s
+            WHERE s.branch_id = :b AND s.status = 'PUBLISHED' AND s.day BETWEEN :f AND :t
+              AND s.position_code NOT IN ('TR', 'TRN')
+            ORDER BY s.day, s.start_min
+            """, p("b", branchId, "f", d(from.minusDays(7)), "t", d(from.minusDays(1))))) {
             int s = ((Number) r.get("s")).intValue();
             int e = normEnd(s, ((Number) r.get("e")).intValue());
             hist.add(new Hist(((Number) r.get("eid")).longValue(), LocalDate.parse((String) r.get("day")), s, e));
@@ -669,23 +685,52 @@ public class SchedPlanService {
         Map<String, Map<String, Object>> tt = new HashMap<>();
         for (Map<String, Object> r : jdbc.queryForList("""
             SELECT d.employee_id AS "eid", to_char(d.day, 'YYYY-MM-DD') AS "day", d.type,
-                   to_char(d.plan_start, 'HH24:MI') AS "start", to_char(d.plan_end, 'HH24:MI') AS "end"
+                   to_char(d.plan_start, 'HH24:MI') AS "start", to_char(d.plan_end, 'HH24:MI') AS "end",
+                   to_char(d.fact_in AT TIME ZONE 'Asia/Almaty', 'HH24:MI') AS "factIn",
+                   extract(epoch FROM ((now() AT TIME ZONE 'Asia/Almaty') - (d.day + d.plan_start))) / 60 AS "sinceStart"
             FROM ext_sheet_day_eff d JOIN ext_employee e ON e.id = d.employee_id
             WHERE e.branch_id = :b AND d.day BETWEEN :f AND :t
             """, p("b", branchId, "f", d(from), "t", d(to)))) {
             tt.put(r.get("eid") + "|" + r.get("day"), r);
         }
-        Map<String, Map<String, Object>> mine = new HashMap<>();
+        // на один день может быть несколько смен (например TR 12:45–16:00 и потом C 16:00–20:00): склеиваем в одну клетку
+        Map<String, List<Map<String, Object>>> grouped = new HashMap<>();
         for (Map<String, Object> r : jdbc.queryForList("""
             SELECT s.employee_id AS "eid", to_char(s.day, 'YYYY-MM-DD') AS "day", s.position_code AS "pos",
                    to_char(s.start_time, 'HH24:MI') AS "start", to_char(s.end_time, 'HH24:MI') AS "end", d.status
             FROM plan_draft_shift s JOIN plan_draft d ON d.id = s.draft_id
             WHERE d.branch_id = :b AND d.status IN ('PUBLISHED', 'DRAFT') AND s.employee_id IS NOT NULL AND s.day BETWEEN :f AND :t
-            ORDER BY (d.status = 'PUBLISHED') DESC, d.id DESC, s.id
+            ORDER BY (d.status = 'PUBLISHED') DESC, d.id DESC, s.start_time, s.id
             """, p("b", branchId, "f", d(from), "t", d(to)))) {
-            mine.putIfAbsent(r.get("eid") + "|" + r.get("day"), r);
+            grouped.computeIfAbsent(r.get("eid") + "|" + r.get("day"), k -> new ArrayList<>()).add(r);
+        }
+        Map<String, Map<String, Object>> mine = new HashMap<>();
+        for (Map.Entry<String, List<Map<String, Object>>> en : grouped.entrySet()) {
+            List<Map<String, Object>> all = en.getValue();
+            Object st0 = all.get(0).get("status");
+            List<Map<String, Object>> rows0 = new ArrayList<>();
+            for (Map<String, Object> r : all) if (st0.equals(r.get("status"))) rows0.add(r);
+            Map<String, Object> m = new LinkedHashMap<>(rows0.get(0));
+            m.put("end", rows0.get(rows0.size() - 1).get("end"));
+            StringBuilder codes = new StringBuilder();
+            List<Map<String, Object>> parts = new ArrayList<>();
+            for (Map<String, Object> r : rows0) {
+                if (codes.indexOf((String) r.get("pos")) < 0 || codes.length() == 0) {
+                    if (codes.length() > 0) codes.append('+');
+                    codes.append(r.get("pos"));
+                }
+                parts.add(Map.of("start", r.get("start"), "end", r.get("end"), "pos", r.get("pos")));
+            }
+            m.put("pos", codes.toString());
+            if (parts.size() > 1) m.put("parts", parts);
+            mine.put(en.getKey(), m);
         }
 
+        // Таймтрекер — главный источник того, кто и когда работает (бумажный график тоже печатается из него).
+        // Наш график добавляет позицию. Для сегодняшнего и прошедших дней при расхождении верим Таймтрекеру;
+        // для будущих дней верим нашему опубликованному графику (его могли ещё не отправить в Таймтрекер).
+        String today = LocalDate.now(ZoneId.of("Asia/Almaty")).toString();
+        int noShowMin = access.intSetting("noshow_hours", 3) * 60; // сколько часов после начала смены без пробития считаем «не вышел»
         List<Map<String, Object>> rows = new ArrayList<>();
         for (Map<String, Object> pr : people) {
             long id = ((Number) pr.get("id")).longValue();
@@ -697,25 +742,55 @@ public class SchedPlanService {
                 Map<String, Object> cell = null;
                 String ttType = t2 == null ? null : (String) t2.get("type");
                 boolean ttAbsent = ttType != null && ttType.matches("(?i).*" + NOT_SHIFT + ".*");
-                boolean ttShift = t2 != null && !ttAbsent && t2.get("start") != null && t2.get("end") != null
-                    && !"weekend".equalsIgnoreCase(ttType);
+                boolean ttWeekend = t2 != null && !ttAbsent && "weekend".equalsIgnoreCase(ttType);
+                boolean ttShift = t2 != null && !ttAbsent && !ttWeekend && t2.get("start") != null && t2.get("end") != null;
+                boolean ttWins = t2 != null && day.compareTo(today) <= 0;
+                Map<String, Object> plan = null;
                 if (m != null) {
+                    plan = new LinkedHashMap<>();
+                    plan.put("start", m.get("start"));
+                    plan.put("end", m.get("end"));
+                    plan.put("pos", m.get("pos"));
+                    if (m.get("parts") != null) plan.put("parts", m.get("parts"));
+                    plan.put("src", "PUBLISHED".equals(m.get("status")) ? "PUB" : "DRAFT");
+                }
+                if (ttWins) {
                     cell = new LinkedHashMap<>();
+                    if (ttShift) {
+                        boolean same = plan != null && plan.get("start").equals(t2.get("start")) && plan.get("end").equals(t2.get("end"));
+                        cell.put("kind", "SHIFT");
+                        cell.put("start", t2.get("start"));
+                        cell.put("end", t2.get("end"));
+                        if (plan != null) {
+                            cell.put("pos", plan.get("pos"));
+                            if (plan.get("parts") != null && same) cell.put("parts", plan.get("parts"));
+                        }
+                        cell.put("src", same ? plan.get("src") : "TT");
+                        if (plan != null && !same) cell.put("plan", plan);
+                        // отметка в Таймтрекере: пришёл / не вышел (нет пробития спустя N часов после начала смены)
+                        if (t2.get("factIn") != null) cell.put("factIn", t2.get("factIn"));
+                        else if (t2.get("sinceStart") != null && ((Number) t2.get("sinceStart")).doubleValue() > noShowMin) cell.put("noShow", true);
+                    } else if (ttAbsent) {
+                        cell.put("kind", "ABSENCE");
+                        cell.put("note", ttType);
+                        if (plan != null) cell.put("plan", plan);
+                    } else {
+                        cell.put("kind", "OFF");
+                        if (plan != null) cell.put("plan", plan);
+                    }
+                } else if (m != null) {
+                    cell = new LinkedHashMap<>(plan);
                     cell.put("kind", "SHIFT");
-                    cell.put("start", m.get("start"));
-                    cell.put("end", m.get("end"));
-                    cell.put("pos", m.get("pos"));
-                    cell.put("src", "PUBLISHED".equals(m.get("status")) ? "PUB" : "DRAFT");
                     if (ttShift && (!m.get("start").equals(t2.get("start")) || !m.get("end").equals(t2.get("end")))) {
                         cell.put("ttStart", t2.get("start"));
                         cell.put("ttEnd", t2.get("end"));
                     }
-                    if (!ttShift && ttAbsent) cell.put("ttNote", ttType);
+                    if (!ttShift && (ttAbsent || ttWeekend)) cell.put("ttNote", ttType);
                 } else if (ttAbsent) {
                     cell = new LinkedHashMap<>();
                     cell.put("kind", "ABSENCE");
                     cell.put("note", ttType);
-                } else if (t2 != null && "weekend".equalsIgnoreCase(ttType)) {
+                } else if (ttWeekend) {
                     cell = new LinkedHashMap<>();
                     cell.put("kind", "OFF");
                 } else if (ttShift) {
@@ -725,7 +800,7 @@ public class SchedPlanService {
                     cell.put("end", t2.get("end"));
                     cell.put("src", "TT");
                 }
-                if (cell != null && !"OFF".equals(cell.get("kind"))) any = true;
+                if (cell != null && "SHIFT".equals(cell.get("kind"))) any = true;
                 cells.add(cell);
             }
             Map<String, Object> row = new LinkedHashMap<>();
@@ -736,6 +811,36 @@ public class SchedPlanService {
             row.put("any", any);
             rows.add(row);
         }
+
+        // Замены: в плане человек был, в Таймтрекере его убрали (выходной/отсутствие), а у другого появилась смена в то же время без плана.
+        for (int di = 0; di < dayList.size(); di++) {
+            List<Map<String, Object>> gone = new ArrayList<>(), came = new ArrayList<>();
+            for (Map<String, Object> row : rows) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> c = ((List<Map<String, Object>>) row.get("cells")).get(di);
+                if (c == null) continue;
+                if (c.get("plan") != null && !"SHIFT".equals(c.get("kind"))) gone.add(row);
+                else if ("SHIFT".equals(c.get("kind")) && "TT".equals(c.get("src")) && c.get("pos") == null && c.get("ttStart") == null) came.add(row);
+            }
+            for (Map<String, Object> g : new ArrayList<>(gone)) {
+                @SuppressWarnings("unchecked")
+                Map<String, Object> gc = ((List<Map<String, Object>>) g.get("cells")).get(di);
+                @SuppressWarnings("unchecked")
+                Map<String, Object> gp = (Map<String, Object>) gc.get("plan");
+                for (Map<String, Object> n : came) {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> nc = ((List<Map<String, Object>>) n.get("cells")).get(di);
+                    if (nc.get("replaces") != null) continue;
+                    if (gp.get("start").equals(nc.get("start")) && gp.get("end").equals(nc.get("end"))) {
+                        nc.put("pos", gp.get("pos"));
+                        nc.put("replaces", g.get("name"));
+                        gc.put("replacedBy", n.get("name"));
+                        break;
+                    }
+                }
+            }
+        }
+
         String synced = jdbc.queryForObject("""
             SELECT to_char(max(d.synced_at) AT TIME ZONE 'Asia/Almaty', 'DD.MM HH24:MI')
             FROM ext_sheet_day_eff d JOIN ext_employee e ON e.id = d.employee_id WHERE e.branch_id = :b
@@ -744,6 +849,329 @@ public class SchedPlanService {
         out.put("days", dayList);
         out.put("rows", rows);
         out.put("ttSyncedAt", synced);
+        Double ago = jdbc.queryForObject("""
+            SELECT extract(epoch FROM (now() - max(d.synced_at))) / 60
+            FROM ext_sheet_day_eff d JOIN ext_employee e ON e.id = d.employee_id WHERE e.branch_id = :b
+            """, p("b", branchId), Double.class);
+        out.put("ttSyncedMin", ago == null ? null : Math.round(ago));
+        return out;
+    }
+
+
+    // ============================================================ аналитика v2: сырые смены, всё считает экран
+
+    /** Что есть в базе: за какие даты загружены гости, график и данные Таймтрекера. Экран по этому выбирает период. */
+    public Map<String, Object> analyticsCoverage(long branchId) {
+        requireBranch(branchId);
+        MapSqlParameterSource par = p("b", branchId);
+        Map<String, Object> m = jdbc.queryForMap("""
+            SELECT (SELECT to_char(min(day), 'YYYY-MM-DD') FROM sales_hour WHERE branch_id = :b) AS "salesFrom",
+                   (SELECT to_char(max(day), 'YYYY-MM-DD') FROM sales_hour WHERE branch_id = :b AND guests > 1) AS "salesTo",
+                   (SELECT to_char(min(s.day), 'YYYY-MM-DD') FROM plan_shift_eff s WHERE s.branch_id = :b) AS "planFrom",
+                   (SELECT to_char(max(s.day), 'YYYY-MM-DD') FROM plan_shift_eff s WHERE s.branch_id = :b) AS "planTo",
+                   (SELECT to_char(min(d.day), 'YYYY-MM-DD') FROM ext_sheet_day_eff d JOIN ext_employee e ON e.id = d.employee_id
+                     WHERE e.branch_id = :b AND d.plan_start IS NOT NULL AND coalesce(d.type, '') <> 'weekend') AS "ttFrom",
+                   (SELECT to_char(max(d.day), 'YYYY-MM-DD') FROM ext_sheet_day_eff d JOIN ext_employee e ON e.id = d.employee_id
+                     WHERE e.branch_id = :b AND d.plan_start IS NOT NULL AND coalesce(d.type, '') <> 'weekend') AS "ttTo"
+            """, par);
+        return new LinkedHashMap<>(m);
+    }
+
+    private static int minutesBetween(String start, String end) {
+        int a = Integer.parseInt(start.substring(0, 2)) * 60 + Integer.parseInt(start.substring(3, 5));
+        int b = end.equals("23:59") ? 1440 : Integer.parseInt(end.substring(0, 2)) * 60 + Integer.parseInt(end.substring(3, 5));
+        int d = b - a;
+        if (d <= 0) d += 1440;
+        return d;
+    }
+
+    /**
+     * Смены сотрудников (без менеджеров) за период в том виде, как их показывает «Общий график»:
+     * Таймтрекер главный, позиция из нашего графика, замены, «не вышел». Плюс гости/выручка по часам и правило перерывов.
+     * Позиция может быть пустой (в нашем графике смены нет, например за прошлые месяцы): тогда экран берёт позицию по умолчанию.
+     */
+    @SuppressWarnings("unchecked")
+    public Map<String, Object> analyticsShifts(long branchId, LocalDate from, LocalDate to, boolean includeDrafts) {
+        requireBranch(branchId);
+        if (to.isBefore(from)) throw bad("Конец периода раньше начала");
+        if (from.plusDays(62).isBefore(to)) throw bad("Период не больше 62 дней");
+
+        List<Map<String, Object>> shifts = new ArrayList<>();
+        Set<Long> ids = new HashSet<>();
+        for (LocalDate c = from; !c.isAfter(to); c = c.plusDays(14)) {
+            int n = (int) Math.min(14, java.time.temporal.ChronoUnit.DAYS.between(c, to) + 1);
+            Map<String, Object> ov = overview(branchId, c, n);
+            List<String> days = (List<String>) ov.get("days");
+            for (Map<String, Object> row : (List<Map<String, Object>>) ov.get("rows")) {
+                List<Map<String, Object>> cells = (List<Map<String, Object>>) row.get("cells");
+                for (int i = 0; i < cells.size(); i++) {
+                    Map<String, Object> cell = cells.get(i);
+                    if (cell == null || !"SHIFT".equals(cell.get("kind"))) continue;
+                    if (!includeDrafts && "DRAFT".equals(cell.get("src"))) continue;
+                    List<Map<String, Object>> parts = (List<Map<String, Object>>) cell.get("parts");
+                    List<Map<String, Object>> list = new ArrayList<>();
+                    if (parts != null && parts.size() > 1) list.addAll(parts);
+                    else list.add(cell);
+                    for (Map<String, Object> pt : list) {
+                        String st = (String) pt.get("start"), en = (String) pt.get("end");
+                        if (st == null || en == null) continue;
+                        Map<String, Object> sh = new LinkedHashMap<>();
+                        sh.put("day", days.get(i));
+                        sh.put("emp", row.get("id"));
+                        sh.put("name", row.get("name"));
+                        sh.put("role", row.get("role"));
+                        sh.put("pos", pt.get("pos"));
+                        sh.put("start", st);
+                        sh.put("end", en);
+                        sh.put("min", minutesBetween(st, en));
+                        sh.put("src", cell.get("src"));
+                        if (Boolean.TRUE.equals(cell.get("noShow"))) sh.put("noShow", true);
+                        if (cell.get("factIn") != null) sh.put("factIn", cell.get("factIn"));
+                        if (cell.get("replaces") != null) sh.put("replaces", cell.get("replaces"));
+                        shifts.add(sh);
+                        ids.add(((Number) row.get("id")).longValue());
+                    }
+                }
+            }
+        }
+
+        // какие позиции умеет каждый (чтобы угадать позицию, если её нет в графике)
+        Map<Long, List<String>> can = new HashMap<>();
+        if (!ids.isEmpty()) {
+            for (Map<String, Object> r : jdbc.queryForList(
+                    "SELECT ep.employee_id AS \"eid\", ep.position_code AS \"code\" FROM emp_position ep WHERE ep.employee_id IN (:ids) ORDER BY ep.position_code",
+                    p("ids", ids))) {
+                can.computeIfAbsent(((Number) r.get("eid")).longValue(), k -> new ArrayList<>()).add((String) r.get("code"));
+            }
+        }
+        Map<String, Object> canOut = new LinkedHashMap<>();
+        can.forEach((k, v) -> canOut.put(String.valueOf(k), v));
+
+        MapSqlParameterSource par = p("b", branchId, "f", d(from), "t", d(to));
+        Map<String, int[]> gcByDay = new LinkedHashMap<>();
+        for (LocalDate x = from; !x.isAfter(to); x = x.plusDays(1)) gcByDay.put(x.toString(), new int[24]);
+        long gcSum = 0;
+        double sumSales = 0;
+        Map<String, Double> amountByDay = new HashMap<>();
+        for (Map<String, Object> r : jdbc.queryForList("""
+            SELECT to_char(day, 'YYYY-MM-DD') AS "day", hour AS "h", guests AS "g", sales AS "s"
+            FROM sales_hour WHERE branch_id = :b AND day BETWEEN :f AND :t
+            """, par)) {
+            int[] a = gcByDay.get((String) r.get("day"));
+            if (a == null) continue;
+            int g = ((Number) r.get("g")).intValue();
+            a[((Number) r.get("h")).intValue()] = g;
+            gcSum += g;
+            sumSales += ((Number) r.get("s")).doubleValue();
+            amountByDay.merge((String) r.get("day"), ((Number) r.get("s")).doubleValue(), Double::sum);
+        }
+        List<Map<String, Object>> byDay = new ArrayList<>();
+        for (Map.Entry<String, int[]> en : gcByDay.entrySet()) {
+            List<Integer> hrs = new ArrayList<>();
+            int tot = 0;
+            for (int v : en.getValue()) { hrs.add(v); tot += v; }
+            byDay.add(Map.of("day", en.getKey(), "hours", hrs, "total", tot, "amount", Math.round(amountByDay.getOrDefault(en.getKey(), 0.0))));
+        }
+        Map<String, Object> sales = new LinkedHashMap<>();
+        sales.put("guests", gcSum);
+        sales.put("amount", Math.round(sumSales));
+        sales.put("avgCheck", gcSum > 0 ? Math.round(sumSales / gcSum) : 0);
+        sales.put("byDay", byDay);
+
+        List<Map<String, Object>> rule = jdbc.queryForList(
+            "SELECT min_hours AS \"minHours\", (SELECT coalesce(sum(x), 0) FROM unnest(minutes) x) AS \"total\", array_to_string(minutes, '+') AS \"text\" FROM plan_break_rule ORDER BY min_hours",
+            new MapSqlParameterSource());
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("from", from.toString());
+        out.put("to", to.toString());
+        out.put("includeDrafts", includeDrafts);
+        out.put("shifts", shifts);
+        out.put("can", canOut);
+        out.put("sales", sales);
+        out.put("breakRule", rule);
+        return out;
+    }
+
+    // ============================================================ аналитика
+
+    /**
+     * Часы, перерывы (непроизводственные часы), позиции и загрузка по часам за период.
+     * Источник — опубликованные недели; черновики подмешиваются только для недель, где публикации ещё нет, и только по просьбе.
+     * Менеджеры в аналитику не входят (у них свой график).
+     */
+    public Map<String, Object> analytics(long branchId, LocalDate from, LocalDate to, boolean includeDrafts) {
+        requireBranch(branchId);
+        if (to.isBefore(from)) throw bad("Конец периода раньше начала");
+        if (from.plusDays(62).isBefore(to)) throw bad("Период не больше 62 дней");
+
+        MapSqlParameterSource par = p("b", branchId, "f", d(from), "t", d(to), "f1", d(from.minusDays(1)), "dr", includeDrafts);
+        String pick = """
+              (s.status = 'PUBLISHED' OR (CAST(:dr AS boolean) AND NOT EXISTS
+                 (SELECT 1 FROM plan_draft d2 WHERE d2.branch_id = s.branch_id AND d2.week_start = s.week_start AND d2.status = 'PUBLISHED')))
+            """;
+        String notManager = "NOT (EXISTS (SELECT 1 FROM kln_user k WHERE k.employee_id = e.id AND k.accesses && " + MANAGER_ACCESS + ") OR " + MANAGER_TITLE_SQL + ")";
+
+        List<Map<String, Object>> emps = jdbc.queryForList("""
+            SELECT e.id, e.full_name AS "name",
+                   count(s.id) AS "shifts", coalesce(sum(s.dur_min), 0) AS "minutes",
+                   coalesce(sum(plan_break_min(s.dur_min)), 0) AS "breakMin",
+                   count(DISTINCT s.day) AS "days",
+                   count(s.id) FILTER (WHERE s.part = 'MORNING') AS "morning",
+                   count(s.id) FILTER (WHERE s.part = 'MID') AS "mid",
+                   count(s.id) FILTER (WHERE s.part = 'EVENING') AS "evening",
+                   count(s.id) FILTER (WHERE s.part = 'NIGHT') AS "night",
+                   count(s.id) FILTER (WHERE extract(isodow FROM s.day) IN (6, 7)) AS "weekend"
+            FROM ext_employee e
+            LEFT JOIN plan_shift_eff s ON s.employee_id = e.id AND s.branch_id = :b AND s.day BETWEEN :f AND :t AND
+            """ + pick + """
+            WHERE e.branch_id = :b AND NOT e.is_fired AND
+            """ + notManager + """
+              AND (s.id IS NOT NULL OR EXISTS (SELECT 1 FROM emp_position ep WHERE ep.employee_id = e.id))
+            GROUP BY e.id, e.full_name
+            ORDER BY coalesce(sum(s.dur_min), 0) DESC, e.full_name
+            """, par);
+
+        Map<Long, List<Map<String, Object>>> byPos = new HashMap<>();
+        for (Map<String, Object> r : jdbc.queryForList("""
+            SELECT s.employee_id AS "eid", s.position_code AS "pos", count(*) AS "shifts", sum(s.dur_min) AS "minutes",
+                   sum(plan_break_min(s.dur_min)) AS "breakMin",
+                   string_agg(s.dur_min::text, ',' ORDER BY s.day, s.start_min) AS "durs"
+            FROM plan_shift_eff s
+            WHERE s.branch_id = :b AND s.day BETWEEN :f AND :t AND
+            """ + pick + """
+            GROUP BY s.employee_id, s.position_code
+            ORDER BY sum(s.dur_min) DESC
+            """, par)) {
+            byPos.computeIfAbsent(((Number) r.get("eid")).longValue(), k -> new ArrayList<>()).add(r);
+        }
+        Map<Long, List<String>> allowed = new HashMap<>();
+        for (Map<String, Object> r : jdbc.queryForList("""
+            SELECT ep.employee_id AS "eid", ep.position_code AS "code" FROM emp_position ep
+            JOIN ext_employee e ON e.id = ep.employee_id WHERE e.branch_id = :b ORDER BY ep.position_code
+            """, par)) {
+            allowed.computeIfAbsent(((Number) r.get("eid")).longValue(), k -> new ArrayList<>()).add((String) r.get("code"));
+        }
+        for (Map<String, Object> e : emps) {
+            long id = ((Number) e.get("id")).longValue();
+            List<Map<String, Object>> bp = byPos.getOrDefault(id, List.of());
+            List<String> can = allowed.getOrDefault(id, List.of());
+            e.put("byPos", bp);
+            e.put("can", can);
+            List<String> off = new ArrayList<>();
+            for (Map<String, Object> x : bp) {
+                String code = (String) x.get("pos");
+                if (!code.equals("TR") && !code.equals("TRN") && !can.contains(code)) off.add(code);
+            }
+            e.put("offPos", off);
+        }
+
+        List<Map<String, Object>> positions = jdbc.queryForList("""
+            SELECT s.position_code AS "pos", count(*) AS "shifts", count(DISTINCT s.employee_id) AS "people",
+                   sum(s.dur_min) AS "minutes", sum(plan_break_min(s.dur_min)) AS "breakMin"
+            FROM plan_shift_eff s
+            JOIN ext_employee e ON e.id = s.employee_id
+            WHERE s.branch_id = :b AND s.day BETWEEN :f AND :t AND
+            """ + pick + " AND " + notManager + """
+
+            GROUP BY s.position_code ORDER BY sum(s.dur_min) DESC
+            """, par);
+
+        // сколько человек в смене в каждый час (на hh:30), включая переходящие через полночь смены предыдущего дня
+        Map<String, int[]> heat = new LinkedHashMap<>();
+        for (LocalDate x = from; !x.isAfter(to); x = x.plusDays(1)) heat.put(x.toString(), new int[24]);
+        for (Map<String, Object> r : jdbc.queryForList("""
+            SELECT to_char(g.day, 'YYYY-MM-DD') AS "day", h.h AS "h", count(*) AS "n"
+            FROM generate_series(CAST(:f AS timestamp), CAST(:t AS timestamp), interval '1 day') g(day)
+            CROSS JOIN generate_series(0, 23) h(h)
+            JOIN plan_shift_eff s ON s.branch_id = :b AND s.day BETWEEN :f1 AND :t
+                 AND (s.day + s.start_time) <= (g.day + h.h * interval '1 hour' + interval '30 minutes')
+                 AND (g.day + h.h * interval '1 hour' + interval '30 minutes') < (s.day + s.start_time + s.dur_min * interval '1 minute')
+                 AND
+            """ + pick + """
+            JOIN ext_employee e ON e.id = s.employee_id AND
+            """ + notManager + """
+
+            GROUP BY g.day, h.h
+            """, par)) {
+            int[] a = heat.get((String) r.get("day"));
+            if (a != null) a[((Number) r.get("h")).intValue()] = ((Number) r.get("n")).intValue();
+        }
+        List<Map<String, Object>> heatOut = new ArrayList<>();
+        for (Map.Entry<String, int[]> en : heat.entrySet()) {
+            List<Integer> hrs = new ArrayList<>();
+            for (int v : en.getValue()) hrs.add(v);
+            heatOut.add(Map.of("day", en.getKey(), "hours", hrs));
+        }
+
+        long minutes = 0, brk = 0, shifts = 0;
+        for (Map<String, Object> e : emps) {
+            minutes += ((Number) e.get("minutes")).longValue();
+            brk += ((Number) e.get("breakMin")).longValue();
+            shifts += ((Number) e.get("shifts")).longValue();
+        }
+        Integer draftWeeks = jdbc.queryForObject("""
+            SELECT count(DISTINCT s.week_start) FROM plan_shift_eff s
+            WHERE s.branch_id = :b AND s.day BETWEEN :f AND :t AND s.status = 'DRAFT'
+              AND NOT EXISTS (SELECT 1 FROM plan_draft d2 WHERE d2.branch_id = s.branch_id AND d2.week_start = s.week_start AND d2.status = 'PUBLISHED')
+            """, par, Integer.class);
+
+        // гости (GC) и выручка из загруженного отчёта «Почасовая выручка»
+        Map<String, int[]> gcByDay = new LinkedHashMap<>();
+        for (LocalDate x = from; !x.isAfter(to); x = x.plusDays(1)) gcByDay.put(x.toString(), new int[24]);
+        long gcSum = 0;
+        double gcSales = 0;
+        int gcDays = 0;
+        for (Map<String, Object> r : jdbc.queryForList("""
+            SELECT to_char(day, 'YYYY-MM-DD') AS "day", hour AS "h", guests AS "g", sales AS "s"
+            FROM sales_hour WHERE branch_id = :b AND day BETWEEN :f AND :t
+            """, par)) {
+            int[] a = gcByDay.get((String) r.get("day"));
+            if (a == null) continue;
+            int g = ((Number) r.get("g")).intValue();
+            a[((Number) r.get("h")).intValue()] = g;
+            gcSum += g;
+            gcSales += ((Number) r.get("s")).doubleValue();
+        }
+        for (int[] a : gcByDay.values()) { int t = 0; for (int v : a) t += v; if (t > 1) gcDays++; }
+        List<Map<String, Object>> gcOut = new ArrayList<>();
+        for (Map.Entry<String, int[]> en : gcByDay.entrySet()) {
+            List<Integer> hrs = new ArrayList<>();
+            for (int v : en.getValue()) hrs.add(v);
+            gcOut.add(Map.of("day", en.getKey(), "hours", hrs));
+        }
+        Map<String, Object> salesOut = new LinkedHashMap<>();
+        salesOut.put("has", gcSum > 0);
+        salesOut.put("guests", gcSum);
+        salesOut.put("amount", Math.round(gcSales));
+        salesOut.put("days", gcDays);
+        salesOut.put("avgCheck", gcSum > 0 ? Math.round(gcSales / gcSum) : 0);
+        salesOut.put("byDay", gcOut);
+        salesOut.put("lastImport", jdbc.queryForList("""
+            SELECT file_name AS "file", restaurant, to_char(from_day, 'YYYY-MM-DD') AS "from", to_char(to_day, 'YYYY-MM-DD') AS "to",
+                   to_char(imported_at AT TIME ZONE 'Asia/Almaty', 'DD.MM HH24:MI') AS "at"
+            FROM sales_import WHERE branch_id = :b ORDER BY id DESC LIMIT 1
+            """, par).stream().findFirst().orElse(null));
+
+        Map<String, Object> total = new LinkedHashMap<>();
+        total.put("people", emps.stream().filter(e -> ((Number) e.get("shifts")).intValue() > 0).count());
+        total.put("shifts", shifts);
+        total.put("minutes", minutes);
+        total.put("breakMin", brk);
+        total.put("prodMin", minutes - brk);
+
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("from", from.toString());
+        out.put("to", to.toString());
+        out.put("includeDrafts", includeDrafts);
+        out.put("draftWeeksOnly", draftWeeks == null ? 0 : draftWeeks);
+        out.put("total", total);
+        out.put("employees", emps);
+        out.put("positions", positions);
+        out.put("heat", heatOut);
+        out.put("sales", salesOut);
+        out.put("breakRule", jdbc.queryForList(
+            "SELECT min_hours AS \"minHours\", array_to_string(minutes, '+') AS \"minutes\" FROM plan_break_rule ORDER BY min_hours", new MapSqlParameterSource()));
         return out;
     }
 

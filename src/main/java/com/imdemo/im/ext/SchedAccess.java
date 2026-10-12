@@ -73,6 +73,32 @@ public class SchedAccess {
         if (!canManage(p)) throw new ApiException(HttpStatus.FORBIDDEN, "Нет доступа к управлению расписанием");
     }
 
+    // ---------- доступ к конкретному ресторану (ext_branch) ----------
+
+    /** Рестораны, которые видит пользователь. null = все (супер-админ и ответственная за расписание). */
+    public List<Long> branchIds(UserPrincipal p) {
+        if (p == null || p.role() == AccountRole.EMPLOYEE) return List.of();
+        if (canManage(p)) return null;
+        if (p.role() == AccountRole.DIRECTOR) {
+            return jdbc.queryForList("SELECT branch_id FROM sched_branch_access WHERE user_id = :u",
+                    Map.of("u", p.id()), Long.class);
+        }
+        return List.of();
+    }
+
+    public boolean canSeeBranch(UserPrincipal p, long branchId) {
+        List<Long> ids = branchIds(p);
+        return ids == null || ids.contains(branchId);
+    }
+
+    /** Аналитика и общий график: роль + доступ именно к этому ресторану. */
+    public void requireBranch(UserPrincipal p, long branchId) {
+        boolean roleOk = canManage(p) || (p != null && p.role() == AccountRole.DIRECTOR);
+        if (!roleOk || !canSeeBranch(p, branchId)) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Нет доступа к этому ресторану");
+        }
+    }
+
     // ---------- менеджеры авторизации для SecurityConfig ----------
 
     private static UserPrincipal principal(Authentication a) {

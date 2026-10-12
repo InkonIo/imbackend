@@ -66,6 +66,14 @@ public class InsightsController {
         return svc.shifts(svc.scope(a), userId, from, to, outletId, limit, offset);
     }
 
+    /** Бланк чек-листа за выбранную дату: кто работал утром и вечером и какие пункты выполнены. */
+    @GetMapping("/checklist-sheet")
+    public Map<String, Object> checklistSheet(Authentication a,
+                                              @RequestParam(required = false) @DateTimeFormat(pattern = ISO) LocalDate date,
+                                              @RequestParam(required = false) Long outletId) {
+        return svc.checklistSheet(svc.scope(a), date, outletId);
+    }
+
     /** Одна смена в деталях: каждый пункт со временем и фото, флаги, проверки директора, события, активность, инвентаризация. */
     @GetMapping("/shifts/{id}")
     public Map<String, Object> shift(Authentication a, @PathVariable long id) {
@@ -100,6 +108,15 @@ public class InsightsController {
     @GetMapping("/inventory/counts/{id}")
     public Map<String, Object> inventoryCount(Authentication a, @PathVariable long id) {
         return svc.inventoryCount(svc.scope(a), id);
+    }
+
+    public record FeedbackIn(String comment) {}
+
+    /** Замечание директора к строке инвентаризации (кому считал: придёт адресату). */
+    @PostMapping("/inventory/counts/{id}/lines/{lineId}/feedback")
+    public Map<String, Object> inventoryFeedback(Authentication a, @PathVariable long id, @PathVariable long lineId,
+                                                 @RequestBody FeedbackIn body) {
+        return svc.addInventoryFeedback(svc.scope(a), id, lineId, body.comment());
     }
 
     /** Сводка по товарам: среднее, мин/макс, разброс, сколько аномалий. */

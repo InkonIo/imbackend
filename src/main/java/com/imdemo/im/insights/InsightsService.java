@@ -253,6 +253,31 @@ public class InsightsService {
         where c.id = :countId
         """;
 
+    static final String Q_SHEET_SHIFTS = """
+        select s.id as shift_id, s.day_part, s.shift_role, u.id as user_id, u.full_name,
+               {TS(s.started_at)} as started_at, {TS(s.finished_at)} as finished_at
+        from shift_session s join app_user u on u.id = s.user_id
+        where s.shift_date = :date and s.outlet_id = :outlet
+        order by s.started_at
+        """;
+
+    static final String Q_SHEET_ITEMS = """
+        select s.id as shift_id, s.day_part, ri.id as item_id, ri.section_order, ri.section_title, ri.sort_order,
+               ri.title, ri.status, to_char(ri.done_at at time zone 'Asia/Almaty', 'HH24:MI') as done_time, ri.comment
+        from shift_session s
+        join checklist_run r on r.shift_id = s.id
+        join checklist_run_item ri on ri.run_id = r.id
+        where s.shift_date = :date and s.outlet_id = :outlet
+        order by ri.section_order, ri.sort_order, s.started_at
+        """;
+
+    static final String Q_INV_FEEDBACK = """
+        select f.id, f.line_id, f.comment, {TS(f.created_at)} as at, a.full_name as author
+        from inventory_feedback f join app_user a on a.id = f.author_id
+        where f.count_id = :countId
+        order by f.id
+        """;
+
     static final String Q_INV_LINES = """
         select l.id as line_id, p.id as product_id, p.name as product, p.unit, p.pack_text, l.zone, l.sort_order,
                l.cs, l.slv, l.ea, l.none_flag, l.total,
@@ -714,6 +739,22 @@ public class InsightsService {
         return out;
     }
 
+    /** Бланк «Чек-лист смены» за дату: смены дня (утро/вечер) и статус каждого пункта. */
+    public Map<String, Object> checklistSheet(Scope s, LocalDate date, Long outletId) {
+        Long outlet = outletId;
+        if (outlet == null && s.outlets().size() == 1) outlet = s.outlets().get(0);
+        if (outlet == null) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Выберите ресторан");
+        if (!s.outlets().contains(outlet)) throw new ResponseStatusException(HttpStatus.FORBIDDEN, "Нет доступа к этому ресторану");
+        LocalDate d = date != null ? date : today();
+        var p = new MapSqlParameterSource().addValue("date", d).addValue("outlet", outlet);
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("date", d.toString());
+        out.put("outletId", outlet);
+        out.put("shifts", q(Q_SHEET_SHIFTS, p));
+        out.put("items", q(Q_SHEET_ITEMS, p));
+        return out;
+    }
+
     public Map<String, Object> shifts(Scope s, Long uid, LocalDate from, LocalDate to, Long outletId, int limit, int offset) {
         var p = params(s, from, to, outletId, uid);
         p.addValue("limit", Math.min(Math.max(limit, 1), 500));
@@ -768,6 +809,27 @@ public class InsightsService {
         Map<String, Object> out = new LinkedHashMap<>();
         out.put("count", head);
         out.put("lines", q(Q_INV_LINES, p));
+        out.put("feedback", q(Q_INV_FEEDBACK, p));
+        return out;
+    }
+
+    /** Директор или супер-админ оставляет замечание к строке подсчёта; адресат — тот, кто считал. */
+    public Map<String, Object> addInventoryFeedback(Scope s, long countId, long lineId, String text) {
+        String c = text == null ? "" : text.trim();
+        if (c.isEmpty() || c.length() > 500)
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Замечание: от 1 до 500 символов");
+        var p = new MapSqlParameterSource("countId", countId);
+        Map<String, Object> head = one(Q_INV_HEAD, p);
+        if (head.isEmpty() || !s.outlets().contains(num(head.get("outlet_id"))))
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        Integer ok = db.queryForObject("select count(*) from inventory_line where id = :l and count_id = :c",
+                new MapSqlParameterSource().addValue("l", lineId).addValue("c", countId), Integer.class);
+        if (ok == null || ok == 0) throw new ResponseStatusException(HttpStatus.NOT_FOUND);
+        db.update("insert into inventory_feedback (count_id, line_id, user_id, author_id, comment) values (:c, :l, :u, :a, :t)",
+                new MapSqlParameterSource().addValue("c", countId).addValue("l", lineId)
+                        .addValue("u", num(head.get("user_id"))).addValue("a", s.userId()).addValue("t", c));
+        Map<String, Object> out = new LinkedHashMap<>();
+        out.put("feedback", q(Q_INV_FEEDBACK, p));
         return out;
     }
 

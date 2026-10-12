@@ -30,8 +30,10 @@ public class SchedPlanController {
     private final SchedPlanService plan;
     private final KlnSyncService kln;
     private final SchedAccess access;
+    private final SalesImportService sales;
 
-    public SchedPlanController(SchedPlanService plan, KlnSyncService kln, SchedAccess access) {
+    public SchedPlanController(SchedPlanService plan, KlnSyncService kln, SchedAccess access, SalesImportService sales) {
+        this.sales = sales;
         this.plan = plan;
         this.kln = kln;
         this.access = access;
@@ -42,10 +44,47 @@ public class SchedPlanController {
     public Map<String, Object> overview(@AuthenticationPrincipal UserPrincipal p, @RequestParam long branchId,
             @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(defaultValue = "7") int days) {
-        if (!(access.canManage(p) || (p != null && p.role() == AccountRole.DIRECTOR))) {
-            throw new ApiException(HttpStatus.FORBIDDEN, "Нет доступа к общему графику");
-        }
+        access.requireBranch(p, branchId);
         return plan.overview(branchId, from, days);
+    }
+
+    /** Аналитика: часы, перерывы, позиции, загрузка по часам. Видят директор, супер-админ и ответственная. */
+    @GetMapping("/api/sched/plan/analytics")
+    public Map<String, Object> analytics(@AuthenticationPrincipal UserPrincipal p, @RequestParam long branchId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(defaultValue = "false") boolean drafts) {
+        access.requireBranch(p, branchId);
+        return plan.analytics(branchId, from, to, drafts);
+    }
+
+    private void requireAnalytics(UserPrincipal p, long branchId) {
+        access.requireBranch(p, branchId);
+    }
+
+    /** За какие даты в базе есть гости, график и Таймтрекер. */
+    @GetMapping("/api/sched/plan/analytics/coverage")
+    public Map<String, Object> analyticsCoverage(@AuthenticationPrincipal UserPrincipal p, @RequestParam long branchId) {
+        requireAnalytics(p, branchId);
+        return plan.analyticsCoverage(branchId);
+    }
+
+    /** Смены сотрудников за период + гости по часам; агрегирует экран. */
+    @GetMapping("/api/sched/plan/analytics/shifts")
+    public Map<String, Object> analyticsShifts(@AuthenticationPrincipal UserPrincipal p, @RequestParam long branchId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(defaultValue = "false") boolean drafts) {
+        requireAnalytics(p, branchId);
+        return plan.analyticsShifts(branchId, from, to, drafts);
+    }
+
+    /** Загрузка отчёта «Почасовая выручка» (xlsx в base64): гости и выручка по часам для GCPH. */
+    @PostMapping("/api/sched/plan/sales/import")
+    public Map<String, Object> importSales(@AuthenticationPrincipal UserPrincipal p, @RequestParam long branchId,
+            @RequestBody Map<String, String> body) {
+        access.requireBranch(p, branchId);
+        return sales.importXlsx(branchId, p == null ? null : p.id(), body.get("fileName"), body.get("data"));
     }
 
     // ---------- справочники и настройки
