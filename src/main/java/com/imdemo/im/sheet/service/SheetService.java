@@ -64,9 +64,15 @@ public class SheetService {
     }
 
     @Transactional
-    public Saved save(UserPrincipal p, Long id, Map<String, String> changes) {
+    public Saved save(UserPrincipal p, Long id, Map<String, String> incoming) {
         ShiftSheet sheet = sheet(id);
         if (!canEdit(p, sheet)) throw forbidden();
+        // утренние галочки и почасовка — только утреннему менеджеру, вечерние — вечернему (чужие поля пропускаем)
+        String parts = partsFor(p, sheet);
+        Map<String, String> changes = new java.util.LinkedHashMap<>();
+        incoming.forEach((k, val) -> {
+            if (allowedKey(parts, k)) changes.put(k, val);
+        });
 
         for (Map.Entry<String, String> e : changes.entrySet()) {
             if (!KEY.matcher(e.getKey()).matches()) {
@@ -303,6 +309,7 @@ public class SheetService {
 
         Map<String, String> map = new HashMap<>();
         values.findBySheetId(sheet.getId()).forEach(v -> map.put(v.getFieldKey(), v.getValue()));
+        map.put("_parts", partsFor(p, sheet)); // служебное поле: какие части бланка может править пользователь ('m', 'e', 'me' или '')
 
         String outletName = outlets.findById(sheet.getOutletId()).map(Outlet::getName).orElse("?");
         return new Sheet(sheet.getId(), sheet.getOutletId(), outletName, sheet.getSheetDate(),
@@ -324,6 +331,27 @@ public class SheetService {
                 .map(s -> s.getUser().getFullName())
                 .distinct()
                 .collect(Collectors.joining(", "));
+    }
+
+    private static final Pattern PART_KEY =
+            Pattern.compile("^(?:(?:chk|exp)\\.[^.]+\\.(m|e)|(?:hr|status)\\.(m|e)\\..+)$");
+
+    /** Какие части бланка (m — утро, e — вечер) может править пользователь. */
+    private String partsFor(UserPrincipal p, ShiftSheet sheet) {
+        if (p.role() == AccountRole.SUPER_ADMIN) return "me";
+        return shifts.findFirstByUserIdAndFinishedAtIsNull(p.id())
+                .filter(s -> s.getOutlet().getId().equals(sheet.getOutletId())
+                        && s.getShiftDate().equals(sheet.getSheetDate()))
+                .map(s -> s.getDayPart() == DayPart.MORNING ? "m" : s.getDayPart() == DayPart.EVENING ? "e" : "me")
+                .orElse("");
+    }
+
+    /** Поле общее (цели, приоритеты, доли…) или относится к части, которую можно править. */
+    private static boolean allowedKey(String parts, String key) {
+        java.util.regex.Matcher m = PART_KEY.matcher(key);
+        if (!m.matches()) return true;
+        String part = m.group(1) != null ? m.group(1) : m.group(2);
+        return parts.contains(part);
     }
 
     /** Править: суперадмин или тот, у кого открыта смена на этой точке. */

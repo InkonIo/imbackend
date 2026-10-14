@@ -40,6 +40,17 @@ public class DayEditController {
         this.push = push;
     }
 
+    /** Править может: супер-админ, ответственная за расписание и директор — только сотрудников своих ресторанов. */
+    private void requireEdit(UserPrincipal p, Long employeeId) {
+        if (access.canManage(p)) return;
+        if (p != null && p.role() == com.imdemo.im.domain.AccountRole.DIRECTOR && employeeId != null) {
+            List<Long> br = jdbc.queryForList("SELECT branch_id FROM ext_employee WHERE id = :e",
+                new MapSqlParameterSource("e", employeeId), Long.class);
+            if (!br.isEmpty() && br.get(0) != null && access.canSeeBranch(p, br.get(0))) return;
+        }
+        throw new ApiException(HttpStatus.FORBIDDEN, "Нет доступа к этому сотруднику");
+    }
+
     private static LocalTime time(String s, String what) {
         try {
             LocalTime t = LocalTime.parse(s == null ? "" : s.trim());
@@ -64,10 +75,10 @@ public class DayEditController {
     @PutMapping("/api/sched/day")
     @Transactional
     public Map<String, Object> edit(@AuthenticationPrincipal UserPrincipal p, @RequestBody EditBody b) {
-        access.requireManage(p);
         if (b == null || b.employeeId() == null || b.day() == null || b.kind() == null) {
             throw new ApiException(HttpStatus.BAD_REQUEST, "Не хватает данных");
         }
+        requireEdit(p, b.employeeId());
         LocalDate day;
         try {
             day = LocalDate.parse(b.day());
@@ -120,7 +131,7 @@ public class DayEditController {
     @GetMapping("/api/sched/day/log")
     public List<Map<String, Object>> log(@AuthenticationPrincipal UserPrincipal p,
             @RequestParam long employeeId, @RequestParam String day) {
-        access.requireManage(p);
+        requireEdit(p, employeeId);
         return jdbc.queryForList("""
             SELECT to_char(l.edited_at AT TIME ZONE 'Asia/Almaty', 'DD.MM HH24:MI') AS "at",
                    coalesce(u.login, '—') AS "by", l.before_text AS "before", l.after_text AS "after"
@@ -132,8 +143,8 @@ public class DayEditController {
     /** Отправка правки дня в Таймтрекер. confirm=false — предпросмотр «было → станет», confirm=true — запись. */
     @org.springframework.web.bind.annotation.PostMapping("/api/sched/day/push")
     public Map<String, Object> pushDay(@AuthenticationPrincipal UserPrincipal p, @RequestBody PushBody b) {
-        access.requireManage(p);
         if (b == null || b.employeeId() == null || b.day() == null) throw new ApiException(HttpStatus.BAD_REQUEST, "Не хватает данных");
+        requireEdit(p, b.employeeId());
         return push.push(b.employeeId(), b.day(), Boolean.TRUE.equals(b.confirm()), p.id());
     }
 }
