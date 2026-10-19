@@ -338,12 +338,14 @@ public class SheetService {
 
     /** Какие части бланка (m — утро, e — вечер) может править пользователь. */
     private String partsFor(UserPrincipal p, ShiftSheet sheet) {
-        if (p.role() == AccountRole.SUPER_ADMIN) return "me";
+        // супер-админ с открытой сменой на этой точке работает как обычный менеджер своей части дня;
+        // без смены — видит и правит обе
+        boolean admin = p.role() == AccountRole.SUPER_ADMIN;
         return shifts.findFirstByUserIdAndFinishedAtIsNull(p.id())
                 .filter(s -> s.getOutlet().getId().equals(sheet.getOutletId())
                         && s.getShiftDate().equals(sheet.getSheetDate()))
                 .map(s -> s.getDayPart() == DayPart.MORNING ? "m" : s.getDayPart() == DayPart.EVENING ? "e" : "me")
-                .orElse("");
+                .orElse(admin ? "me" : "");
     }
 
     /** Поле общее (цели, приоритеты, доли…) или относится к части, которую можно править. */

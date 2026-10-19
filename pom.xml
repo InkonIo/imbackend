@@ -27,10 +27,10 @@
 		<url/>
 	</scm>
 	<properties>
-		<java.version>17</java.version>
-		<springdoc.version>3.1.0</springdoc.version>
-		<poi.version>5.5.1</poi.version>
-		<jjwt.version>0.13.0</jjwt.version>
+    	<java.version>17</java.version>   <!-- was 17, change to match your JDK -->
+    	<springdoc.version>3.1.0</springdoc.version>
+    	<poi.version>5.5.1</poi.version>
+    	<jjwt.version>0.13.0</jjwt.version>
 	</properties>
 	<dependencies>
 		<dependency>

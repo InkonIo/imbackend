@@ -17,10 +17,8 @@ public final class ScheduleDto {
     public record Staff(Long userId, String fullName, String login, JobTitle jobTitle,
                         boolean canInside, boolean schedulable, int maxShiftsWeek) {}
 
-    /** Промеж в штатке: роль (кухня/прилавок) + время. */
     public record MiddleShift(@NotNull ShiftRole role, @NotNull LocalTime start, @NotNull LocalTime end) {}
 
-    /** conflict: нельзя (отпуск, больничный, не инсайд); limit: просил не ставить (можно, но с предупреждением). */
     public record Slot(LocalDate date, DayPart dayPart, ShiftRole role, LocalTime startTime, LocalTime endTime,
                        Long userId, String userName, boolean published, String conflict, String limit) {}
 
@@ -67,4 +65,18 @@ public final class ScheduleDto {
 
     public record MySlot(LocalDate date, DayPart dayPart, ShiftRole role, LocalTime startTime, LocalTime endTime,
                          Long outletId, String outletName) {}
+
+    // ===== Manager Schedule =====
+    public record ManagerWeekDto(Long id, LocalDate weekStart, String title) {}
+
+    public record ManagerEntryDto(Long id, Long userId, String userName, String jobTitle,
+        LocalDate date, String shiftStart, String shiftEnd, boolean dayOff, String comment) {}
+
+    public record ManagerBoardDto(ManagerWeekDto week, List<ManagerEntryDto> entries, List<Staff> staff) {}
+
+    public record CreateWeekRequest(@NotNull Long outletId, @NotNull LocalDate weekStart,
+        String title, Long copyFromWeekId) {}
+
+    public record SaveEntryRequest(@NotNull Long weekId, @NotNull Long outletId, @NotNull Long userId,
+        @NotNull LocalDate date, String shiftStart, String shiftEnd, boolean dayOff, String comment) {}
 }
