@@ -53,6 +53,20 @@ public class SheetController {
         return service.importSales(p, id, body.get("fileName"), body.get("data"));
     }
 
+    /** Excel «Прогноз продаж»: план по дням/часам и план людей. */
+    @PostMapping("/{id}/forecast-import")
+    public java.util.Map<String, Object> forecastImport(@AuthenticationPrincipal UserPrincipal p, @PathVariable Long id,
+                                                        @RequestBody java.util.Map<String, String> body) {
+        return service.importForecast(p, id, body.get("fileName"), body.get("data"));
+    }
+
+    /** Excel «10. Ежечасный сэндвич» за один день. */
+    @PostMapping("/{id}/sandwich-import")
+    public java.util.Map<String, Object> sandwichImport(@AuthenticationPrincipal UserPrincipal p, @PathVariable Long id,
+                                                        @RequestBody java.util.Map<String, String> body) {
+        return service.importSandwich(p, id, body.get("fileName"), body.get("data"));
+    }
+
     @PutMapping("/{id}/values")
     public Saved save(@AuthenticationPrincipal UserPrincipal p, @PathVariable Long id,
                       @Valid @RequestBody SaveRequest r) {

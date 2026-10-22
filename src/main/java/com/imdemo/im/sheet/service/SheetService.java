@@ -40,6 +40,7 @@ public class SheetService {
     private final org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate jdbc;
     private final com.imdemo.im.ext.SchedAccess sched;
     private final com.imdemo.im.ext.SalesImportService salesImport;
+    private final com.imdemo.im.ext.PlanImportService planImport;
 
     /** Лист точки на дату моей открытой смены. Создаётся при первом открытии. */
     @Transactional
@@ -126,7 +127,7 @@ public class SheetService {
     }
 
     /**
-     * Для бланка: результат за вчера (SALES, GC, Av.check) и цели на сегодня =
+     * Для бланка: результат за такой же день прошлой недели (SALES, GC, Av.check) и цели на сегодня =
      * среднее за 3 предыдущих такого же дня недели + процент роста (по умолчанию 1%).
      * Данные берутся из sales_hour (загружаются Excel-ом на вкладке «Аналитика» расписания).
      */
@@ -136,7 +137,7 @@ public class SheetService {
         if (!canView(p, sheet)) throw forbidden();
         Map<String, Object> out = new LinkedHashMap<>();
         java.time.LocalDate day = sheet.getSheetDate();
-        java.time.LocalDate prevDay = day.minusDays(1);
+        java.time.LocalDate prevDay = day.minusDays(7); // «предыдущий» = такой же день недели неделей раньше
         int pct = sched.intSetting(GROWTH_KEY, 1);
         out.put("pct", pct);
         out.put("prevDate", prevDay.toString());
@@ -228,7 +229,134 @@ public class SheetService {
             double k = 1 + pct / 100.0, n = basis.size();
             out.put("goal", triple(sumS / n * k, sumG / n * k, sumA / n * k));
         }
+        out.put("planSource", "history");
+        applyForecast(out, br.get(0), day);
+        out.put("sand", sandwiches(out, br.get(0), day, prevDay, basisDays, pct));
+
+        // до какой даты есть данные iiko: понятно, почему нет «вчера»
+        java.sql.Date last = jdbc.queryForObject("SELECT max(day) FROM sales_hour WHERE branch_id = :b",
+                Map.of("b", br.get(0)), java.sql.Date.class);
+        out.put("lastDay", last == null ? null : last.toLocalDate().toString());
         return out;
+    }
+
+    /** Если загружен Excel с прогнозом на этот день, цели и план по часам берём из него. */
+    private void applyForecast(Map<String, Object> out, long branch, java.time.LocalDate day) {
+        var src = new org.springframework.jdbc.core.namedparam.MapSqlParameterSource().addValue("b", branch).addValue("d", day);
+        List<Map<String, Object>> pd = jdbc.queryForList(
+                "SELECT orders, revenue, avg_check, gcph, plan_hours, plan_count FROM plan_day WHERE branch_id = :b AND day = :d", src);
+        if (pd.isEmpty() || pd.get(0).get("orders") == null || pd.get(0).get("revenue") == null) return;
+        Map<String, Object> r = pd.get(0);
+        double orders = dbl(r.get("orders")), rev = dbl(r.get("revenue"));
+        double avg = r.get("avg_check") != null ? dbl(r.get("avg_check")) : (orders > 0 ? rev / orders : 0);
+        out.put("goal", triple(rev, orders, avg));
+        out.put("planSource", "forecast");
+        Map<String, Object> staff = new LinkedHashMap<>();
+        staff.put("gcph", r.get("gcph"));
+        staff.put("hours", r.get("plan_hours"));
+        staff.put("count", r.get("plan_count"));
+        out.put("staff", staff);
+        List<Map<String, Object>> plan = new ArrayList<>();
+        for (Map<String, Object> h : jdbc.queryForList(
+                "SELECT hour, orders, revenue FROM plan_hour WHERE branch_id = :b AND day = :d ORDER BY hour", src)) {
+            Map<String, Object> m = new LinkedHashMap<>();
+            m.put("hour", ((Number) h.get("hour")).intValue());
+            m.put("gc", Math.round(dbl(h.get("orders"))));
+            m.put("sales", Math.round(dbl(h.get("revenue"))));
+            plan.add(m);
+        }
+        if (!plan.isEmpty()) out.put("planHours", plan);
+    }
+
+    /**
+     * Сэндвичи из отчёта «Ежечасный сэндвич»: факт по часам сегодня, итог за вчера,
+     * цель = GC план × сэндвичи факт ÷ GC факт за такой же день прошлой недели.
+     */
+    @SuppressWarnings("unchecked")
+    private Map<String, Object> sandwiches(Map<String, Object> out, long branch, java.time.LocalDate day,
+                                           java.time.LocalDate prevDay, List<java.time.LocalDate> basisDays, int pct) {
+        Map<String, Object> m = new LinkedHashMap<>();
+        var src = new org.springframework.jdbc.core.namedparam.MapSqlParameterSource().addValue("b", branch).addValue("d", day);
+        List<Map<String, Object>> today = new ArrayList<>();
+        for (Map<String, Object> r : jdbc.queryForList(
+                "SELECT hour, qty FROM sandwich_hour WHERE branch_id = :b AND day = :d ORDER BY hour", src)) {
+            Map<String, Object> h = new LinkedHashMap<>();
+            h.put("hour", ((Number) r.get("hour")).intValue());
+            h.put("qty", ((Number) r.get("qty")).intValue());
+            today.add(h);
+        }
+        m.put("hours", today);
+
+        List<java.time.LocalDate> wanted = new ArrayList<>(basisDays);
+        wanted.add(prevDay);
+        Map<java.time.LocalDate, Double> tot = new HashMap<>();
+        for (Map<String, Object> r : jdbc.queryForList(
+                "SELECT day, sum(qty) AS q FROM sandwich_hour WHERE branch_id = :b AND day IN (:days) GROUP BY day",
+                new org.springframework.jdbc.core.namedparam.MapSqlParameterSource().addValue("b", branch).addValue("days", wanted))) {
+            tot.put(((java.sql.Date) r.get("day")).toLocalDate(), dbl(r.get("q")));
+        }
+        m.put("prev", tot.containsKey(prevDay) ? Math.round(tot.get(prevDay)) : null);
+
+        // формула компании: сэндвичи план = GC план директора × сэндвичи факт ÷ GC общее факт (за такой же день прошлой недели)
+        Double prevQty = tot.get(prevDay);
+        Double prevGc = jdbc.queryForObject("SELECT sum(guests) FROM sales_hour WHERE branch_id = :b AND day = :pd",
+                new org.springframework.jdbc.core.namedparam.MapSqlParameterSource().addValue("b", branch).addValue("pd", prevDay), Double.class);
+        Double ratio = null;
+        String source = null;
+        if (prevQty != null && prevGc != null && prevGc > 0) {
+            ratio = prevQty / prevGc;
+            source = "formula";
+        } else {
+            // нет данных за прошлую неделю: берём долю сэндвичей на гостя за последние дни с данными
+            ratio = jdbc.queryForObject(
+                    "SELECT sum(s.q)::float8 / nullif(sum(g.g), 0) "
+                            + "FROM (SELECT day, sum(qty) AS q FROM sandwich_hour WHERE branch_id = :b AND day < :d GROUP BY day) s "
+                            + "JOIN (SELECT day, sum(guests) AS g FROM sales_hour WHERE branch_id = :b GROUP BY day) g USING (day)",
+                    src, Double.class);
+            if (ratio != null) source = "ratio";
+        }
+        Long goal = null;
+        List<Map<String, Object>> plan = new ArrayList<>();
+        Map<String, Object> g = (Map<String, Object>) out.get("goal");
+        if (ratio != null && g != null) {
+            goal = Math.round(dbl(g.get("gc")) * ratio);
+            if (out.get("planHours") instanceof List<?> l) {
+                for (Object o : l) {
+                    Map<String, Object> row = (Map<String, Object>) o;
+                    Map<String, Object> h = new LinkedHashMap<>();
+                    h.put("hour", row.get("hour"));
+                    h.put("qty", Math.round(dbl(row.get("gc")) * ratio));
+                    plan.add(h);
+                }
+            }
+            m.put("source", source);
+        }
+        m.put("goal", goal);
+        m.put("planHours", plan);
+        return m;
+    }
+
+    /** Загрузка Excel «Прогноз продаж» (план по дням и по часам, план людей). */
+    @Transactional
+    public Map<String, Object> importForecast(UserPrincipal p, Long id, String fileName, String data) {
+        ShiftSheet sheet = sheet(id);
+        if (!canEdit(p, sheet)) throw forbidden();
+        return planImport.importForecast(branchOf(sheet), fileName, data);
+    }
+
+    /** Загрузка Excel «10. Ежечасный сэндвич» за один день. */
+    @Transactional
+    public Map<String, Object> importSandwich(UserPrincipal p, Long id, String fileName, String data) {
+        ShiftSheet sheet = sheet(id);
+        if (!canEdit(p, sheet)) throw forbidden();
+        return planImport.importSandwich(branchOf(sheet), fileName, data);
+    }
+
+    private long branchOf(ShiftSheet sheet) {
+        List<Long> br = jdbc.queryForList("SELECT branch_id FROM outlet_ext_branch WHERE outlet_id = :o",
+                Map.of("o", sheet.getOutletId()), Long.class);
+        if (br.isEmpty()) throw new ApiException(HttpStatus.BAD_REQUEST, "Точка не привязана к ресторану из тайм-трекера");
+        return br.get(0);
     }
 
     /** Загрузка Excel «Почасовая выручка» прямо из бланка (кто может править бланк). */

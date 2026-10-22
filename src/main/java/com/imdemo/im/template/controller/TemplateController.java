@@ -10,6 +10,7 @@ import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
+import java.util.Map;
 
 @RestController
 @RequestMapping("/api/templates")
@@ -44,6 +45,18 @@ public class TemplateController {
     public ResponseEntity<Void> delete(@AuthenticationPrincipal UserPrincipal p, @PathVariable Long id) {
         service.delete(p, id);
         return ResponseEntity.noContent().build();
+    }
+
+    /** Что сотрётся, если удалить маршрут вместе со сменами (суперадмин). */
+    @GetMapping("/{id}/force-preview")
+    public Map<String, Long> forcePreview(@AuthenticationPrincipal UserPrincipal p, @PathVariable Long id) {
+        return service.forcePreview(p, id);
+    }
+
+    /** Удалить маршрут вместе со всеми сменами по нему (суперадмин, необратимо). */
+    @DeleteMapping("/{id}/force")
+    public Map<String, Long> forceDelete(@AuthenticationPrincipal UserPrincipal p, @PathVariable Long id) {
+        return service.forceDelete(p, id);
     }
 
     // ---- разделы ----

@@ -35,6 +35,7 @@ public class TemplateService {
     private final UserRepository users;
     private final AuditService audit;
     private final EntityManager em;
+    private final TemplateForceDelete force;
 
     /** Суперадмин: всё. Директор: видит общие и свои, правит только маршруты своих точек. */
     private record Access(boolean admin, Set<Long> outletIds) {
@@ -143,6 +144,40 @@ public class TemplateService {
         } catch (DataIntegrityViolationException e) {
             throw new ApiException(HttpStatus.CONFLICT, "По этому маршруту уже были смены. Удалить нельзя, выключи его");
         }
+    }
+
+    /** Что сотрётся при принудительном удалении (только суперадмин). Ничего не меняет. */
+    @Transactional(readOnly = true)
+    public Map<String, Long> forcePreview(UserPrincipal p, Long id) {
+        requireAdmin(p);
+        template(id);
+        return force.run(tableOf(ChecklistTemplate.class), "id = " + id, true);
+    }
+
+    /** Удалить маршрут вместе со всеми сменами по нему. Только суперадмин; необратимо. */
+    @Transactional
+    public Map<String, Long> forceDelete(UserPrincipal p, Long id) {
+        requireAdmin(p);
+        ChecklistTemplate t = template(id);
+        log(id, "Маршрут удалён вместе со сменами: " + t.getTitle());
+        em.flush();
+        em.clear();
+        Map<String, Long> res = force.run(tableOf(ChecklistTemplate.class), "id = " + id, false);
+        em.clear();
+        return res;
+    }
+
+    private static void requireAdmin(UserPrincipal p) {
+        if (p.role() != AccountRole.SUPER_ADMIN) {
+            throw new ApiException(HttpStatus.FORBIDDEN, "Принудительно удалять может только суперадмин");
+        }
+    }
+
+    /** Имя таблицы сущности: из @Table, иначе как в Spring Boot (ChecklistTemplate → checklist_template). */
+    private static String tableOf(Class<?> c) {
+        jakarta.persistence.Table t = c.getAnnotation(jakarta.persistence.Table.class);
+        if (t != null && !t.name().isBlank()) return t.name();
+        return c.getSimpleName().replaceAll("([a-z0-9])([A-Z])", "$1_$2").toLowerCase(Locale.ROOT);
     }
 
     // ================= разделы =================

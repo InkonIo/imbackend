@@ -1,12 +1,13 @@
 package com.imdemo.im.schedule.service;
 
 import com.imdemo.im.domain.AppUser;
+import com.imdemo.im.ext.ManagerScheduleParser;
 import com.imdemo.im.repo.UserRepository;
-import com.imdemo.im.schedule.domain.*;
-import com.imdemo.im.schedule.repository.*;
+import com.imdemo.im.schedule.domain.ManagerScheduleEntry;
+import com.imdemo.im.schedule.domain.ManagerWeek;
+import com.imdemo.im.schedule.repository.ManagerScheduleRepository;
+import com.imdemo.im.schedule.repository.ManagerWeekRepository;
 import lombok.RequiredArgsConstructor;
-import org.apache.poi.ss.usermodel.*;
-import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.multipart.MultipartFile;
@@ -14,10 +15,17 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.IOException;
 import java.time.LocalDate;
 import java.time.LocalTime;
-import java.time.format.DateTimeFormatter;
+import java.time.OffsetDateTime;
 import java.util.*;
-import java.util.regex.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
+/**
+ * Загрузка «Расписание менеджеров» (Excel директора) в «График менеджеров».
+ * Одна клетка = «ЧЧ:ММ-ЧЧ:ММ», перенос строки, задачи. Время идёт в смену, весь остальной текст
+ * (позиция INS/K/C и задачи) целиком попадает в «Задачи на день». Повторная загрузка той же недели
+ * обновляет клетки (время и задачи), а не создаёт дубли; клетки людей, которых нет в файле, не трогаем.
+ */
 @Service
 @RequiredArgsConstructor
 public class ExcelScheduleImporter {
@@ -26,144 +34,169 @@ public class ExcelScheduleImporter {
     private final ManagerScheduleRepository entryRepo;
     private final UserRepository userRepo;
 
-    private static final Pattern TIME_PAT = Pattern.compile(
-        "(\\d{1,2})[:h](\\d{2})\\s*[-\u2013]\\s*(\\d{1,2})[:h](\\d{2})");
-    private static final DateTimeFormatter FMT = DateTimeFormatter.ofPattern("HH:mm");
-
-    public static class ImportResult {
-        public final List<String> log;
-        public final String error;
-        public ImportResult(List<String> log, String error) { this.log = log; this.error = error; }
+    public static class Result {
+        public final List<String> log = new ArrayList<>();
+        public String error;
     }
 
+    private static final Pattern RANGE = Pattern.compile("^(\\d{1,2})[:.](\\d{2})\\s*[-–—]\\s*(\\d{1,2})[:.](\\d{2})(.*)$", Pattern.DOTALL);
+
     public List<String> sheetNames(MultipartFile file) throws IOException {
-        try (Workbook wb = new XSSFWorkbook(file.getInputStream())) {
-            List<String> names = new ArrayList<>();
-            for (int i = 0; i < wb.getNumberOfSheets(); i++) names.add(wb.getSheetName(i));
-            return names;
-        }
+        return ManagerScheduleParser.parse(file.getBytes()).stream().map(ManagerScheduleParser.Week::sheet).toList();
     }
 
     @Transactional
-    public ImportResult importSheet(Long outletId, MultipartFile file, String sheetName) throws IOException {
-        try (Workbook wb = new XSSFWorkbook(file.getInputStream())) {
-            Sheet sheet = sheetName != null ? wb.getSheet(sheetName) : wb.getSheetAt(0);
-            if (sheet == null) sheet = wb.getSheetAt(0);
-            return parseSheet(outletId, sheet);
+    public Result importSheet(Long outletId, MultipartFile file, String sheetName) throws IOException {
+        Result res = new Result();
+        List<ManagerScheduleParser.Week> weeks;
+        try {
+            weeks = ManagerScheduleParser.parse(file.getBytes());
+        } catch (IllegalArgumentException e) {
+            res.error = e.getMessage();
+            return res;
         }
-    }
+        if (sheetName != null && !sheetName.isBlank()) {
+            weeks = weeks.stream().filter(w -> w.sheet().trim().equals(sheetName.trim())).toList();
+        }
+        if (weeks.isEmpty()) {
+            res.error = "В файле не нашёл листов с расписанием: нужна шапка «Понедельник … Воскресенье» и даты под ней";
+            return res;
+        }
 
-    private ImportResult parseSheet(Long outletId, Sheet sheet) {
-        Row dateRow = sheet.getRow(3);
-        if (dateRow == null) return new ImportResult(List.of(), "Нет строки с датами (строка 4)");
+        List<AppUser> staff = userRepo.findAll().stream()
+                .filter(AppUser::isActive)
+                .filter(u -> u.getOutlets().stream().anyMatch(o -> o.getId().equals(outletId)))
+                .toList();
 
-        LocalDate[] dates = new LocalDate[7];
-        for (int col = 1; col <= 7; col++) {
-            Cell c = dateRow.getCell(col);
-            if (c != null && c.getCellType() == CellType.NUMERIC && DateUtil.isCellDateFormatted(c)) {
-                dates[col - 1] = c.getLocalDateTimeCellValue().toLocalDate();
+        for (ManagerScheduleParser.Week w : weeks) {
+            LocalDate monday = LocalDate.parse(w.weekStart());
+            ManagerWeek week = weekRepo.findByOutletIdAndWeekStart(outletId, monday).orElse(null);
+            boolean created = false;
+            if (week == null) {
+                week = new ManagerWeek();
+                week.setOutletId(outletId);
+                week.setWeekStart(monday);
+                week.setTitle(w.sheet().trim());
+                week = weekRepo.save(week);
+                created = true;
             }
-        }
-        LocalDate weekStart = null;
-        for (LocalDate d : dates) { if (d != null) { weekStart = d; break; } }
-        if (weekStart == null) return new ImportResult(List.of(), "Не найдены даты в строке 4");
+            Long weekId = week.getId();
+            List<ManagerScheduleEntry> existing = entryRepo.findByWeekId(weekId);
+            int added = 0, updated = 0, tasks = 0;
+            List<String> skipped = new ArrayList<>();
+            Set<String> unmatched = new TreeSet<>();
 
-        final LocalDate ws = weekStart;
-        ManagerWeek week = weekRepo.findByOutletIdAndWeekStart(outletId, ws).orElseGet(() -> {
-            ManagerWeek w = new ManagerWeek();
-            w.setOutletId(outletId); w.setWeekStart(ws);
-            w.setTitle(sheet.getSheetName());
-            return weekRepo.save(w);
-        });
-
-        List<AppUser> users = userRepo.findAll().stream()
-            .filter(AppUser::isActive)
-            .filter(u -> u.getOutlets().stream().anyMatch(o -> o.getId().equals(outletId)))
-            .toList();
-
-        List<String> log = new ArrayList<>();
-        int saved = 0;
-
-        for (int rowIdx = 4; rowIdx <= sheet.getLastRowNum(); rowIdx++) {
-            Row row = sheet.getRow(rowIdx);
-            if (row == null) continue;
-            Cell nameCell = row.getCell(0);
-            if (nameCell == null) continue;
-            String rawName = nameCell.getStringCellValue().trim();
-            if (rawName.isBlank()) continue;
-            if (rawName.contains("Подпись") || rawName.startsWith("Дата:")
-                || rawName.contains("Консультант")) continue;
-
-            AppUser user = findUser(users, rawName);
-            if (user == null) { log.add("\u26a0 Не найден: " + rawName); continue; }
-
-            for (int col = 1; col <= 7; col++) {
-                LocalDate date = dates[col - 1];
-                if (date == null) continue;
-                String raw = cellText(row.getCell(col));
-                if (raw.isBlank()) continue;
-
-                ManagerScheduleEntry entry = entryRepo
-                    .findByWeekIdAndUserIdAndSchedDate(week.getId(), user.getId(), date)
-                    .orElseGet(ManagerScheduleEntry::new);
-                entry.setWeekId(week.getId());
-                entry.setOutletId(outletId);
-                entry.setUserId(user.getId());
-                entry.setSchedDate(date);
-
-                String upper = raw.toUpperCase();
-                if (upper.startsWith("OFF**")) {
-                    entry.setDayOff(true); entry.setShiftStart(null); entry.setShiftEnd(null);
-                    entry.setComment("**");
-                } else if (upper.startsWith("OFF")) {
-                    entry.setDayOff(true); entry.setShiftStart(null); entry.setShiftEnd(null);
-                    entry.setComment(null);
-                } else {
-                    entry.setDayOff(false);
-                    Matcher m = TIME_PAT.matcher(raw);
-                    if (m.find()) {
-                        entry.setShiftStart(LocalTime.of(Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2))));
-                        entry.setShiftEnd(LocalTime.of(Integer.parseInt(m.group(3)), Integer.parseInt(m.group(4))));
-                    }
-                    String[] lines = raw.split("\n", 2);
-                    entry.setComment(lines.length > 1 ? lines[1].strip() : null);
+            for (ManagerScheduleParser.Person pr : w.people()) {
+                AppUser u = match(pr.name(), staff);
+                if (u == null) {
+                    if (pr.cells().stream().anyMatch(c -> !"TASK".equals(c.kind()) || c.raw() != null)) unmatched.add(pr.name());
+                    continue;
                 }
-                entryRepo.save(entry);
-                saved++;
+                for (ManagerScheduleParser.Cell c : pr.cells()) {
+                    if (c.date() == null) continue;
+                    LocalDate day = LocalDate.parse(c.date());
+                    boolean off = "OFF".equals(c.kind());
+                    boolean shift = "SHIFT".equals(c.kind()) && c.warn() == null;
+                    // клетка без времени, только текст («Инженерный обход 2 / планирование ПТО»): это задача дня
+                    boolean taskOnly = "TASK".equals(c.kind()) && c.raw() != null && !c.raw().isBlank();
+                    if (!off && !shift && !taskOnly) {
+                        if (c.raw() != null && !c.raw().isBlank() && !"VACATION".equals(c.kind())) {
+                            skipped.add(pr.name() + " · " + c.date().substring(8) + "." + c.date().substring(5, 7) + ": «" + shorten(c.raw()) + "», " + (c.warn() == null ? "не смена" : c.warn()));
+                        }
+                        continue;
+                    }
+                    ManagerScheduleEntry e = existing.stream()
+                            .filter(x -> x.getUserId().equals(u.getId()) && x.getSchedDate().equals(day))
+                            .findFirst().orElse(null);
+                    boolean isNew = e == null;
+                    if (isNew) e = new ManagerScheduleEntry();
+                    e.setWeekId(weekId);
+                    e.setOutletId(outletId);
+                    e.setUserId(u.getId());
+                    e.setSchedDate(day);
+                    if (taskOnly) {
+                        String text = c.raw().replaceAll("\\s+", " ").trim();
+                        String prev = e.getComment() == null ? "" : e.getComment();
+                        if (isNew) {
+                            e.setShiftStart(null);
+                            e.setShiftEnd(null);
+                            e.setDayOff(false);
+                            e.setComment(text);
+                        } else if (!prev.contains(text)) {
+                            e.setComment(prev.isBlank() || "**".equals(prev) ? text : prev + " · " + text);
+                        }
+                        tasks++;
+                    } else if (off) {
+                        e.setShiftStart(null);
+                        e.setShiftEnd(null);
+                        e.setDayOff(true);
+                        e.setComment(c.raw() != null && c.raw().contains("**") ? "**" : null);
+                    } else {
+                        e.setShiftStart(LocalTime.parse(c.start()));
+                        e.setShiftEnd(LocalTime.parse(c.end()));
+                        e.setDayOff(false);
+                        String text = tasksOf(c.raw());
+                        e.setComment(text.isEmpty() ? null : text);
+                        if (!text.isEmpty()) tasks++;
+                    }
+                    e.setUpdatedAt(OffsetDateTime.now());
+                    ManagerScheduleEntry saved = entryRepo.save(e);
+                    if (isNew) { existing.add(saved); added++; } else updated++;
+                }
+            }
+            res.log.add((created ? "➕ Лист " : "♻ Лист ") + w.sheet().trim() + " (" + monday + "): новых клеток " + added
+                    + ", обновлено " + updated + ", с задачами " + tasks);
+            if (!unmatched.isEmpty()) res.log.add("   ⚠ Нет на сайте или имя не совпало: " + String.join(", ", unmatched));
+            for (String s : skipped) res.log.add("   ⚠ Пропущено: " + s);
+        }
+        return res;
+    }
+
+    /** Всё после времени: «INS \ проверка часов х\к» или «Расписание работников / проверка часов ТТ». */
+    static String tasksOf(String raw) {
+        if (raw == null) return "";
+        String s = raw.replace(' ', ' ').trim();
+        Matcher m = RANGE.matcher(s);
+        String rest = m.matches() ? m.group(5) : s;
+        return rest.replaceAll("\\s+", " ").replaceFirst("^[\\s|/\\\\,.\\-–+]+", "").trim();
+    }
+
+    private static String shorten(String s) {
+        String x = s.replaceAll("\\s+", " ").trim();
+        return x.length() > 40 ? x.substring(0, 40) + "…" : x;
+    }
+
+    // ---- сопоставление имён: «Жексен Аружан» (Excel) ↔ «Аружан» (сайт)
+
+    private static String norm(String s) {
+        return s == null ? "" : s.toLowerCase(Locale.ROOT).replace('ё', 'е').replaceAll("[^\\p{L}\\s-]", " ").trim();
+    }
+
+    private static Set<String> tokens(String s) {
+        Set<String> t = new TreeSet<>();
+        for (String x : norm(s).split("\\s+")) if (!x.isEmpty()) t.add(x);
+        return t;
+    }
+
+    private static AppUser match(String excelName, List<AppUser> staff) {
+        Set<String> t = tokens(excelName);
+        if (t.isEmpty()) return null;
+        for (AppUser u : staff) if (tokens(u.getFullName()).equals(t)) return u;
+        AppUser found = null;
+        for (AppUser u : staff) {                       // имя на сайте целиком есть в имени из Excel
+            Set<String> ut = tokens(u.getFullName());
+            if (!ut.isEmpty() && t.containsAll(ut)) {
+                if (found != null) { found = null; break; }
+                found = u;
             }
         }
-        log.add(0, "\u2713 Импортировано записей: " + saved);
-        return new ImportResult(log, null);
-    }
-
-    private String cellText(Cell c) {
-        if (c == null) return "";
-        return switch (c.getCellType()) {
-            case STRING -> c.getStringCellValue().trim();
-            case NUMERIC -> DateUtil.isCellDateFormatted(c)
-                ? c.getLocalDateTimeCellValue().toLocalTime().format(FMT)
-                : String.valueOf((long) c.getNumericCellValue());
-            default -> "";
-        };
-    }
-
-    private AppUser findUser(List<AppUser> users, String excelName) {
-        String lower = excelName.toLowerCase().trim();
-        for (AppUser u : users)
-            if (u.getFullName() != null && u.getFullName().toLowerCase().trim().equals(lower)) return u;
-        String[] parts = lower.split("\\s+");
-        for (AppUser u : users) {
-            if (u.getLogin() == null) continue;
-            String login = u.getLogin().toLowerCase();
-            for (String p : parts)
-                if (p.length() > 2 && login.equals(p)) return u;
+        if (found != null) return found;
+        for (AppUser u : staff) {                       // имя из Excel целиком есть в имени на сайте
+            if (tokens(u.getFullName()).containsAll(t)) {
+                if (found != null) return null;
+                found = u;
+            }
         }
-        for (AppUser u : users) {
-            if (u.getFullName() == null || u.getFullName().isBlank()) continue;
-            String fn = u.getFullName().toLowerCase().trim();
-            for (String p : parts)
-                if (p.length() > 2 && (fn.equals(p) || lower.contains(fn) || fn.contains(p))) return u;
-        }
-        return null;
+        return found;
     }
 }
